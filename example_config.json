@@ -4,10 +4,20 @@
   "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
   
   "atlases": [
+    "ATAG_basal_ganglia",
+    "Campbell",
+    "Cerebellum-SUIT",
+    "CerebrA",
+    "FreeSurferSeg",
+    "HCP842_tractography",
     "FreeSurferDKT_Cortical",
-    "Brainnetome",
+    "FreeSurferDKT_Subcortical", 
+    "Brainnectome",
     "HCPex",
-    "JulichBrain"
+    "HCP-MMP",
+    "JulichBrain",
+    "Brodmann",
+    "BrainSeg"
   ],
   "connectivity_values": [
     "count",
