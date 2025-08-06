@@ -164,13 +164,21 @@ class ConnectivityExtractor:
         return pilot_files
         
     def setup_logging(self):
-        """Set up logging configuration."""
+        """Set up logging configuration with dedicated logs folder."""
+        # Create logs directory if it doesn't exist
+        logs_dir = 'logs'
+        os.makedirs(logs_dir, exist_ok=True)
+        
+        # Generate timestamped log filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_file = os.path.join(logs_dir, f'connectivity_extraction_{timestamp}.log')
+        
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler('connectivity_extraction.log')
+                logging.FileHandler(log_file)
             ]
         )
         self.logger = logging.getLogger(__name__)
@@ -186,6 +194,7 @@ class ConnectivityExtractor:
             self.logger.info(f"🔧 DSI Studio Version: {dsi_check['version']}")
         self.logger.info(f"📁 DSI Studio Path: {dsi_check['path']}")
         self.logger.info(f"📅 Session Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"📄 Log File: {log_file}")
         self.logger.info("=" * 60)
     
     def check_dsi_studio(self) -> Dict[str, Any]:
