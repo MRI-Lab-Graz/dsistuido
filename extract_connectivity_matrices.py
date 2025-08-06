@@ -263,67 +263,7 @@ class ConnectivityExtractor:
             validation_result['info'].append(msg)
             self.logger.info(msg)
         
-        # 2. Check input folder settings if specified
-        input_settings = self.config.get('input_settings', {})
-        input_folder = input_settings.get('input_folder')
-        
-        if input_folder and input_folder != '/path/to/your/fib/files':
-            self.logger.info(f"🔍 Checking input folder: {input_folder}")
-            
-            if not os.path.exists(input_folder):
-                validation_result['errors'].append(f"Input folder does not exist: {input_folder}")
-                validation_result['valid'] = False
-            elif not os.path.isdir(input_folder):
-                validation_result['errors'].append(f"Input folder is not a directory: {input_folder}")
-                validation_result['valid'] = False
-            else:
-                validation_result['info'].append(f"✅ Input folder exists: {input_folder}")
-                
-                # Check for fiber files
-                file_pattern = input_settings.get('file_pattern', '*.fib.gz')
-                self.logger.info(f"🔍 Looking for files matching: {file_pattern}")
-                
-                # Support both .fib.gz and .fz extensions
-                patterns_to_check = []
-                if file_pattern == '*.fib.gz':
-                    patterns_to_check = ['*.fib.gz', '*.fz']
-                else:
-                    patterns_to_check = [file_pattern]
-                
-                found_files = []
-                for pattern in patterns_to_check:
-                    if input_settings.get('recursive_search', True):
-                        search_pattern = os.path.join(input_folder, '**', pattern)
-                        found_files.extend(glob.glob(search_pattern, recursive=True))
-                    else:
-                        search_pattern = os.path.join(input_folder, pattern)
-                        found_files.extend(glob.glob(search_pattern))
-                
-                found_files = list(set(found_files))  # Remove duplicates
-                
-                if not found_files:
-                    validation_result['warnings'].append(f"No fiber files found matching patterns {patterns_to_check} in {input_folder}")
-                else:
-                    # Analyze file types
-                    fz_files = [f for f in found_files if f.endswith('.fz')]
-                    fib_gz_files = [f for f in found_files if f.endswith('.fib.gz')]
-                    
-                    msg = f"✅ Found {len(found_files)} fiber files:"
-                    if fz_files:
-                        msg += f" {len(fz_files)} .fz files"
-                    if fib_gz_files:
-                        msg += f" {len(fib_gz_files)} .fib.gz files"
-                    
-                    validation_result['info'].append(msg)
-                    self.logger.info(msg)
-                    
-                    # Show first few files as examples
-                    for i, file in enumerate(found_files[:3]):
-                        self.logger.info(f"   - {os.path.basename(file)}")
-                    if len(found_files) > 3:
-                        self.logger.info(f"   ... and {len(found_files) - 3} more")
-        
-        # 3. Validate atlases
+        # 2. Validate atlases
         atlases = self.config.get('atlases', [])
         if not atlases:
             validation_result['warnings'].append("No atlases specified")
@@ -331,7 +271,7 @@ class ConnectivityExtractor:
             self.logger.info(f"📊 Will process {len(atlases)} atlases: {', '.join(atlases)}")
             validation_result['info'].append(f"Configured atlases: {', '.join(atlases)}")
         
-        # 4. Validate connectivity values
+        # 3. Validate connectivity values
         conn_values = self.config.get('connectivity_values', [])
         if not conn_values:
             validation_result['warnings'].append("No connectivity values specified")
@@ -339,7 +279,7 @@ class ConnectivityExtractor:
             self.logger.info(f"📊 Will extract {len(conn_values)} connectivity metrics: {', '.join(conn_values)}")
             validation_result['info'].append(f"Connectivity metrics: {', '.join(conn_values)}")
         
-        # 5. Check tracking parameters for reasonable values
+        # 4. Check tracking parameters for reasonable values
         tracking_params = self.config.get('tracking_parameters', {})
         track_count = self.config.get('track_count', 100000)
         
@@ -361,7 +301,7 @@ class ConnectivityExtractor:
         if turning_angle > 180:
             validation_result['warnings'].append(f"Turning angle {turning_angle}° seems too large")
         
-        # 6. Check output directory permissions (if creating new)
+        # 5. Check thread count
         thread_count = self.config.get('thread_count', 8)
         if thread_count <= 0:
             validation_result['errors'].append(f"Thread count must be positive, got: {thread_count}")
@@ -384,6 +324,46 @@ class ConnectivityExtractor:
             self.logger.error(f"❌ {len(validation_result['errors'])} error(s) found")
             for error in validation_result['errors']:
                 self.logger.error(f"   - {error}")
+        
+        return validation_result
+    
+    def validate_input_path(self, input_path: str, file_pattern: str = "*.fib.gz") -> Dict[str, Any]:
+        """Validate input path and find fiber files (runtime validation)."""
+        validation_result = {
+            'valid': True,
+            'errors': [],
+            'warnings': [],
+            'info': [],
+            'files_found': []
+        }
+        
+        if not os.path.exists(input_path):
+            validation_result['errors'].append(f"Input path does not exist: {input_path}")
+            validation_result['valid'] = False
+            return validation_result
+        
+        if os.path.isfile(input_path):
+            # Single file processing
+            if not (input_path.endswith('.fib.gz') or input_path.endswith('.fz')):
+                validation_result['warnings'].append(f"File extension should be .fib.gz or .fz: {input_path}")
+            validation_result['files_found'] = [input_path]
+            validation_result['info'].append(f"Single file mode: {os.path.basename(input_path)}")
+            
+        elif os.path.isdir(input_path):
+            # Directory processing
+            self.logger.info(f"🔍 Scanning directory: {input_path}")
+            files_found = self.find_fib_files(input_path, file_pattern)
+            
+            if not files_found:
+                validation_result['errors'].append(f"No fiber files found in directory: {input_path}")
+                validation_result['valid'] = False
+            else:
+                validation_result['files_found'] = files_found
+                # File info is logged by find_fib_files method
+                
+        else:
+            validation_result['errors'].append(f"Input path is neither file nor directory: {input_path}")
+            validation_result['valid'] = False
         
         return validation_result
     
@@ -944,9 +924,15 @@ Examples:
             print(f"📁 Input directory: {args.input}")
             print(f"🔍 File pattern: {args.pattern}")
             
-            # Find all fiber files
-            fiber_files = extractor.find_fib_files(args.input, args.pattern)
+            # Validate input path and find files
+            input_validation = extractor.validate_input_path(args.input, args.pattern)
+            if not input_validation['valid']:
+                print("❌ Input validation failed!")
+                for error in input_validation['errors']:
+                    print(f"   ❌ {error}")
+                sys.exit(1)
             
+            fiber_files = input_validation['files_found']
             if not fiber_files:
                 print("❌ No fiber files found!")
                 print("💡 Supported formats: .fib.gz and .fz files")
@@ -1020,6 +1006,15 @@ Examples:
         else:
             # Single file processing mode
             print(f"📊 Processing single file: {args.input}")
+            
+            # Validate single input file
+            input_validation = extractor.validate_input_path(args.input)
+            if not input_validation['valid']:
+                print("❌ Input file validation failed!")
+                for error in input_validation['errors']:
+                    print(f"   ❌ {error}")
+                sys.exit(1)
+            
             result = extractor.extract_all_matrices(args.input, args.output)
             print("✅ Processing completed successfully!")
             

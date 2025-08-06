@@ -18,7 +18,8 @@ from extract_connectivity_matrices import ConnectivityExtractor, DEFAULT_CONFIG
 def main():
     parser = argparse.ArgumentParser(description="Validate DSI Studio setup and configuration")
     parser.add_argument('--config', type=str, help='Configuration file to validate')
-    parser.add_argument('--input-folder', type=str, help='Test input folder for file discovery')
+    parser.add_argument('--test-input', type=str, help='Test input path (file or folder) for validation')
+    parser.add_argument('--pattern', type=str, default='*.fib.gz', help='File pattern to test (for directories)')
     
     args = parser.parse_args()
     
@@ -40,10 +41,6 @@ def main():
         print(f"⚠️  Configuration file not found: {config_file}")
         print("   Using default configuration")
     
-    # Override input folder if provided
-    if args.input_folder:
-        config.setdefault('input_settings', {})['input_folder'] = args.input_folder
-    
     print("\n" + "="*60)
     print("🔍 DSI STUDIO SETUP VALIDATION")
     print("="*60)
@@ -51,6 +48,21 @@ def main():
     # Create extractor and run validation
     extractor = ConnectivityExtractor(config)
     validation_result = extractor.validate_configuration()
+    
+    # Test input path if provided
+    if args.test_input:
+        print(f"\n🔍 Testing input path: {args.test_input}")
+        input_validation = extractor.validate_input_path(args.test_input, args.pattern)
+        
+        if input_validation['valid']:
+            files_count = len(input_validation['files_found'])
+            print(f"✅ Input validation passed - Found {files_count} file(s)")
+        else:
+            print("❌ Input validation failed:")
+            for error in input_validation['errors']:
+                print(f"   ❌ {error}")
+            validation_result['valid'] = False
+            validation_result['errors'].extend(input_validation['errors'])
     
     print("\n" + "="*60)
     print("📊 VALIDATION SUMMARY")
@@ -65,11 +77,9 @@ def main():
         print(f"   🔄 Tracks: {config['track_count']:,}")
         print(f"   ⚡ Threads: {config['thread_count']}")
         
-        # Show input folder info if configured
-        input_settings = config.get('input_settings', {})
-        input_folder = input_settings.get('input_folder')
-        if input_folder and input_folder != '/path/to/your/fib/files':
-            print(f"   📁 Input folder: {input_folder}")
+        # Show test input info if provided
+        if args.test_input:
+            print(f"   🧪 Test input: {args.test_input}")
         
     else:
         print("❌ VALIDATION FAILED - Fix errors before processing!")

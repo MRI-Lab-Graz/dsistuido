@@ -1,23 +1,13 @@
 {
-  "comment": "DSI Studio Connectivity Matrix Extraction Configuration - Processing settings only",
+  "comment": "Example configuration for connectivity matrix extraction",
   
-  "dsi_studio_cmd": "/Applications/DSI_Studio.app/Contents/MacOS/dsi_studio",
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
   
   "atlases": [
-    "AAL",
-    "AAL2", 
     "AAL3",
-    "Brodmann",
-    "HCP-MMP",
-    "AICHA",
-    "Talairach",
+    "Brainnetome",
     "FreeSurferDKT",
-    "FreeSurferDKT_Cortical",
-    "Schaefer100",
-    "Schaefer200",
-    "Schaefer400",
-    "Gordon333",
-    "Power264"
+    "FreeSurferDKT_Cortical"
   ],
   "connectivity_values": [
     "count",
@@ -26,16 +16,7 @@
     "mean_length",
     "qa",
     "fa",
-    "dti_fa",
-    "md",
-    "ad", 
-    "rd",
-    "iso",
-    "rdi",
-    "ndi",
-    "dti_ad",
-    "dti_rd",
-    "dti_md"
+    "dti_fa"
   ],
   "track_count": 100000,
   "thread_count": 8,
