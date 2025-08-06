@@ -70,7 +70,7 @@ class ConnectivityExtractor:
     
     def find_fib_files(self, input_folder: str, pattern: str = "*.fib.gz") -> List[str]:
         """
-        Find all fiber files in a folder.
+        Find all fiber files in a folder, supporting both .fib.gz and .fz extensions.
         
         Parameters:
         -----------
@@ -84,12 +84,26 @@ class ConnectivityExtractor:
         List[str]
             List of found fiber files
         """
-        search_patterns = [
-            os.path.join(input_folder, pattern),
-            os.path.join(input_folder, "*.fz"),  # Also search for .fz files
-            os.path.join(input_folder, "**", pattern),  # Recursive search
-            os.path.join(input_folder, "**", "*.fz")  # Recursive .fz search
-        ]
+        # Enhanced patterns to catch both .fz and .fib.gz files
+        base_patterns = []
+        
+        if pattern == "*.fib.gz":
+            # If default pattern, search for both extensions
+            base_patterns = ["*.fib.gz", "*.fz"]
+        else:
+            # Use provided pattern, but also try .fz variant
+            base_patterns = [pattern]
+            if not pattern.endswith(".fz"):
+                fz_pattern = pattern.replace(".fib.gz", ".fz")
+                base_patterns.append(fz_pattern)
+        
+        # Create comprehensive search patterns
+        search_patterns = []
+        for base_pattern in base_patterns:
+            # Direct search in folder
+            search_patterns.append(os.path.join(input_folder, base_pattern))
+            # Recursive search
+            search_patterns.append(os.path.join(input_folder, "**", base_pattern))
         
         all_files = []
         for search_pattern in search_patterns:
@@ -99,9 +113,21 @@ class ConnectivityExtractor:
         # Remove duplicates and sort
         unique_files = sorted(list(set(all_files)))
         
+        # Categorize files by type
+        fz_files = [f for f in unique_files if f.endswith('.fz')]
+        fib_gz_files = [f for f in unique_files if f.endswith('.fib.gz')]
+        
         self.logger.info(f"Found {len(unique_files)} fiber files in {input_folder}")
-        for file in unique_files:
-            self.logger.info(f"  - {os.path.basename(file)}")
+        if fz_files:
+            self.logger.info(f"  - {len(fz_files)} .fz files")
+        if fib_gz_files:
+            self.logger.info(f"  - {len(fib_gz_files)} .fib.gz files")
+            
+        # Show first few files as examples
+        for i, file in enumerate(unique_files[:5]):
+            self.logger.info(f"    {i+1}. {os.path.basename(file)}")
+        if len(unique_files) > 5:
+            self.logger.info(f"    ... and {len(unique_files) - 5} more")
             
         return unique_files
     
@@ -149,18 +175,59 @@ class ConnectivityExtractor:
         )
         self.logger = logging.getLogger(__name__)
     
-    def check_dsi_studio(self) -> bool:
-        """Check if DSI Studio is available in PATH."""
+    def check_dsi_studio(self) -> Dict[str, Any]:
+        """Check if DSI Studio is available and working properly."""
+        dsi_cmd = self.config['dsi_studio_cmd']
+        result = {
+            'available': False,
+            'path': dsi_cmd,
+            'version': None,
+            'error': None
+        }
+        
+        # Check if file exists (for absolute paths)
+        if os.path.isabs(dsi_cmd):
+            if not os.path.exists(dsi_cmd):
+                result['error'] = f"DSI Studio executable not found at: {dsi_cmd}"
+                return result
+            if not os.access(dsi_cmd, os.X_OK):
+                result['error'] = f"DSI Studio executable is not executable: {dsi_cmd}"
+                return result
+        
+        # Test execution
         try:
-            result = subprocess.run(
-                [self.config['dsi_studio_cmd'], '--help'],
+            test_result = subprocess.run(
+                [dsi_cmd, '--help'],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
+            
+            if test_result.returncode == 0:
+                result['available'] = True
+                # Try to extract version info
+                try:
+                    version_result = subprocess.run(
+                        [dsi_cmd, '--version'],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if version_result.returncode == 0 and version_result.stdout:
+                        result['version'] = version_result.stdout.strip()
+                except:
+                    pass  # Version check is optional
+            else:
+                result['error'] = f"DSI Studio returned error code {test_result.returncode}"
+                
+        except subprocess.TimeoutExpired:
+            result['error'] = "DSI Studio command timed out"
+        except FileNotFoundError:
+            result['error'] = f"DSI Studio command not found: {dsi_cmd}. Check PATH or use absolute path."
+        except Exception as e:
+            result['error'] = f"Error running DSI Studio: {str(e)}"
+            
+        return result
     
     def validate_input_file(self, filepath: str) -> bool:
         """Validate the input fiber file."""
@@ -173,6 +240,152 @@ class ConnectivityExtractor:
             self.logger.warning(f"Input file should be .fib.gz or .fz: {filepath}")
         
         return True
+    
+    def validate_configuration(self) -> Dict[str, Any]:
+        """Comprehensive validation of configuration and environment."""
+        validation_result = {
+            'valid': True,
+            'errors': [],
+            'warnings': [],
+            'info': []
+        }
+        
+        # 1. Check DSI Studio
+        self.logger.info("🔍 Checking DSI Studio availability...")
+        dsi_check = self.check_dsi_studio()
+        if not dsi_check['available']:
+            validation_result['errors'].append(f"DSI Studio check failed: {dsi_check['error']}")
+            validation_result['valid'] = False
+        else:
+            msg = f"✅ DSI Studio found at: {dsi_check['path']}"
+            if dsi_check['version']:
+                msg += f" (Version: {dsi_check['version']})"
+            validation_result['info'].append(msg)
+            self.logger.info(msg)
+        
+        # 2. Check input folder settings if specified
+        input_settings = self.config.get('input_settings', {})
+        input_folder = input_settings.get('input_folder')
+        
+        if input_folder and input_folder != '/path/to/your/fib/files':
+            self.logger.info(f"🔍 Checking input folder: {input_folder}")
+            
+            if not os.path.exists(input_folder):
+                validation_result['errors'].append(f"Input folder does not exist: {input_folder}")
+                validation_result['valid'] = False
+            elif not os.path.isdir(input_folder):
+                validation_result['errors'].append(f"Input folder is not a directory: {input_folder}")
+                validation_result['valid'] = False
+            else:
+                validation_result['info'].append(f"✅ Input folder exists: {input_folder}")
+                
+                # Check for fiber files
+                file_pattern = input_settings.get('file_pattern', '*.fib.gz')
+                self.logger.info(f"🔍 Looking for files matching: {file_pattern}")
+                
+                # Support both .fib.gz and .fz extensions
+                patterns_to_check = []
+                if file_pattern == '*.fib.gz':
+                    patterns_to_check = ['*.fib.gz', '*.fz']
+                else:
+                    patterns_to_check = [file_pattern]
+                
+                found_files = []
+                for pattern in patterns_to_check:
+                    if input_settings.get('recursive_search', True):
+                        search_pattern = os.path.join(input_folder, '**', pattern)
+                        found_files.extend(glob.glob(search_pattern, recursive=True))
+                    else:
+                        search_pattern = os.path.join(input_folder, pattern)
+                        found_files.extend(glob.glob(search_pattern))
+                
+                found_files = list(set(found_files))  # Remove duplicates
+                
+                if not found_files:
+                    validation_result['warnings'].append(f"No fiber files found matching patterns {patterns_to_check} in {input_folder}")
+                else:
+                    # Analyze file types
+                    fz_files = [f for f in found_files if f.endswith('.fz')]
+                    fib_gz_files = [f for f in found_files if f.endswith('.fib.gz')]
+                    
+                    msg = f"✅ Found {len(found_files)} fiber files:"
+                    if fz_files:
+                        msg += f" {len(fz_files)} .fz files"
+                    if fib_gz_files:
+                        msg += f" {len(fib_gz_files)} .fib.gz files"
+                    
+                    validation_result['info'].append(msg)
+                    self.logger.info(msg)
+                    
+                    # Show first few files as examples
+                    for i, file in enumerate(found_files[:3]):
+                        self.logger.info(f"   - {os.path.basename(file)}")
+                    if len(found_files) > 3:
+                        self.logger.info(f"   ... and {len(found_files) - 3} more")
+        
+        # 3. Validate atlases
+        atlases = self.config.get('atlases', [])
+        if not atlases:
+            validation_result['warnings'].append("No atlases specified")
+        else:
+            self.logger.info(f"📊 Will process {len(atlases)} atlases: {', '.join(atlases)}")
+            validation_result['info'].append(f"Configured atlases: {', '.join(atlases)}")
+        
+        # 4. Validate connectivity values
+        conn_values = self.config.get('connectivity_values', [])
+        if not conn_values:
+            validation_result['warnings'].append("No connectivity values specified")
+        else:
+            self.logger.info(f"📊 Will extract {len(conn_values)} connectivity metrics: {', '.join(conn_values)}")
+            validation_result['info'].append(f"Connectivity metrics: {', '.join(conn_values)}")
+        
+        # 5. Check tracking parameters for reasonable values
+        tracking_params = self.config.get('tracking_parameters', {})
+        track_count = self.config.get('track_count', 100000)
+        
+        if track_count <= 0:
+            validation_result['errors'].append(f"Track count must be positive, got: {track_count}")
+            validation_result['valid'] = False
+        elif track_count < 1000:
+            validation_result['warnings'].append(f"Low track count ({track_count}), results may be sparse")
+        elif track_count > 1000000:
+            validation_result['warnings'].append(f"Very high track count ({track_count}), processing may be slow")
+        
+        # Check FA threshold
+        fa_threshold = tracking_params.get('fa_threshold', 0.0)
+        if fa_threshold < 0 or fa_threshold > 1:
+            validation_result['warnings'].append(f"FA threshold {fa_threshold} outside normal range [0-1]")
+        
+        # Check turning angle
+        turning_angle = tracking_params.get('turning_angle', 0.0)
+        if turning_angle > 180:
+            validation_result['warnings'].append(f"Turning angle {turning_angle}° seems too large")
+        
+        # 6. Check output directory permissions (if creating new)
+        thread_count = self.config.get('thread_count', 8)
+        if thread_count <= 0:
+            validation_result['errors'].append(f"Thread count must be positive, got: {thread_count}")
+            validation_result['valid'] = False
+        elif thread_count > 32:
+            validation_result['warnings'].append(f"Very high thread count ({thread_count}), may exceed system capacity")
+        
+        # Summary
+        if validation_result['valid']:
+            self.logger.info("✅ Configuration validation passed")
+        else:
+            self.logger.error("❌ Configuration validation failed")
+        
+        if validation_result['warnings']:
+            self.logger.warning(f"⚠️  {len(validation_result['warnings'])} warning(s) found")
+            for warning in validation_result['warnings']:
+                self.logger.warning(f"   - {warning}")
+        
+        if validation_result['errors']:
+            self.logger.error(f"❌ {len(validation_result['errors'])} error(s) found")
+            for error in validation_result['errors']:
+                self.logger.error(f"   - {error}")
+        
+        return validation_result
     
     def create_output_structure(self, output_dir: str, base_name: str) -> Path:
         """Create organized output directory structure based on settings."""
@@ -339,8 +552,18 @@ class ConnectivityExtractor:
     def extract_all_matrices(self, input_file: str, output_dir: str, 
                            atlases: List[str] = None) -> Dict:
         """Extract connectivity matrices for all specified atlases."""
-        if not self.check_dsi_studio():
-            raise RuntimeError("DSI Studio not found in PATH")
+        # Run comprehensive validation first
+        self.logger.info("🚀 Starting connectivity matrix extraction...")
+        self.logger.info("=" * 60)
+        
+        validation_result = self.validate_configuration()
+        if not validation_result['valid']:
+            raise RuntimeError(f"Configuration validation failed: {validation_result['errors']}")
+        
+        # Additional DSI Studio check with detailed info
+        dsi_check = self.check_dsi_studio()
+        if not dsi_check['available']:
+            raise RuntimeError(f"DSI Studio not available: {dsi_check['error']}")
         
         if not self.validate_input_file(input_file):
             raise ValueError(f"Invalid input file: {input_file}")
@@ -351,9 +574,13 @@ class ConnectivityExtractor:
         # Create output directory structure
         run_dir = self.create_output_structure(output_dir, base_name)
         
-        self.logger.info(f"Starting connectivity extraction for {len(atlases)} atlases")
-        self.logger.info(f"Input: {input_file}")
-        self.logger.info(f"Output: {run_dir}")
+        self.logger.info(f"🎯 Starting connectivity extraction for {len(atlases)} atlases")
+        self.logger.info(f"📁 Input: {input_file}")
+        self.logger.info(f"📁 Output: {run_dir}")
+        self.logger.info(f"🧠 DSI Studio: {dsi_check['path']}")
+        if dsi_check['version']:
+            self.logger.info(f"📊 Version: {dsi_check['version']}")
+        self.logger.info("=" * 60)
         
         # Process each atlas
         results = []
@@ -695,17 +922,34 @@ Examples:
     try:
         extractor = ConnectivityExtractor(config)
         
+        # Run validation first
+        print("🔍 Validating configuration...")
+        validation_result = extractor.validate_configuration()
+        
+        if not validation_result['valid']:
+            print("❌ Configuration validation failed!")
+            for error in validation_result['errors']:
+                print(f"   ❌ {error}")
+            sys.exit(1)
+        
+        if validation_result['warnings']:
+            print(f"⚠️  {len(validation_result['warnings'])} warning(s):")
+            for warning in validation_result['warnings']:
+                print(f"   ⚠️  {warning}")
+            print()
+        
         if args.batch or os.path.isdir(args.input):
             # Batch processing mode
             print(f"🔍 Batch processing mode activated")
-            print(f"Input directory: {args.input}")
-            print(f"File pattern: {args.pattern}")
+            print(f"📁 Input directory: {args.input}")
+            print(f"🔍 File pattern: {args.pattern}")
             
             # Find all fiber files
             fiber_files = extractor.find_fib_files(args.input, args.pattern)
             
             if not fiber_files:
                 print("❌ No fiber files found!")
+                print("💡 Supported formats: .fib.gz and .fz files")
                 sys.exit(1)
             
             # Handle pilot mode

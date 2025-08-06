@@ -7,7 +7,7 @@
     "recursive_search": true,
     "pilot_mode": false,
     "pilot_count": 1,
-    "comment": "Set input_folder to batch process all files in a directory. Use pilot_mode for testing."
+    "comment": "Set input_folder to batch process all files in a directory. file_pattern supports *.fib.gz and *.fz (will auto-search both). Use pilot_mode for testing."
   },
   
   "atlases": [
@@ -46,7 +46,7 @@
   ],
   "track_count": 100000,
   "thread_count": 8,
-  "dsi_studio_cmd": "dsi_studio",
+  "dsi_studio_cmd": "/Applications/DSI_Studio.app/Contents/MacOS/dsi_studio",
   "tracking_parameters": {
     "method": 0,
     "otsu_threshold": 0.6,
@@ -67,6 +67,9 @@
     "connectivity_output": "matrix,connectogram,measure"
   },
   "comments": {
+    "file_formats": "Script supports both .fib.gz and .fz fiber files automatically",
+    "dsi_studio_cmd": "Full path to DSI Studio executable (use 'dsi_studio' if in PATH)",
+    "input_folder": "Set to actual path for batch processing, or use command line arguments",
     "method": "Tracking algorithm: 0=Streamline(Euler), 1=RK4, 2=Voxel tracking",
     "otsu_threshold": "Default Otsu threshold (0.1-1.0)",
     "fa_threshold": "FA threshold for termination (0=automatic)",
