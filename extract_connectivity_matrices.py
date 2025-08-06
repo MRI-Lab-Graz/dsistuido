@@ -1109,7 +1109,9 @@ For more help: see README.md
                 sys.exit(1)
 
             result = extractor.extract_all_matrices(args.input, args.output)
-            print("✅ Processing completed successfully!")    except KeyboardInterrupt:
+            print("✅ Processing completed successfully!")
+            
+    except KeyboardInterrupt:
         print("\n⚠️  Processing interrupted by user")
         sys.exit(1)
     
