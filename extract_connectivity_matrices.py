@@ -783,91 +783,138 @@ def create_batch_processor(input_dir: str, output_dir: str, pattern: str = "*.fi
 def main():
     """Main function for command-line interface."""
     parser = argparse.ArgumentParser(
-        description="Extract connectivity matrices for different atlases using DSI Studio",
+        description="🧠 DSI Studio Connectivity Matrix Extraction Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  python extract_connectivity_matrices.py subject001.fib.gz ./output
-  python extract_connectivity_matrices.py -a AAL2,HCP-MMP subject.fib.gz ./matrices
-  python extract_connectivity_matrices.py --batch ./input_dir ./output_dir
-  python extract_connectivity_matrices.py --method 1 --turning_angle 45 subject.fib.gz ./output
-        """
-    )
+🎯 QUICK START EXAMPLES:
+  
+  # 1. Validate setup first (recommended)
+  python validate_setup.py --config my_config.json
+  
+  # 2. Single file processing
+  python extract_connectivity_matrices.py --config my_config.json subject.fz output/
+  
+  # 3. Pilot test (test 1-2 files first)
+  python extract_connectivity_matrices.py --config my_config.json --pilot --batch data_dir/ output/
+  
+  # 4. Full batch processing
+  python extract_connectivity_matrices.py --config my_config.json --batch data_dir/ output/
+
+📋 DETAILED EXAMPLES:
+
+  # Basic single file with custom atlases
+  python extract_connectivity_matrices.py --config my_config.json \\
+      --atlases "AAL3,Brainnetome" subject.fz output/
+  
+  # Batch with specific settings
+  python extract_connectivity_matrices.py --config my_config.json \\
+      --batch --pattern "*.fz" --tracks 50000 --threads 16 data_dir/ output/
+  
+  # High-resolution tracking
+  python extract_connectivity_matrices.py --config my_config.json \\
+      --method 1 --fa_threshold 0.15 --turning_angle 35 subject.fz output/
+
+📁 SUPPORTED FILE FORMATS: .fib.gz, .fz (auto-detected)
+
+🔧 CONFIGURATION: Use --config to specify JSON configuration file
+   (see example_config.json for template)
+
+For more help: see README.md
+        """)
     
-    parser.add_argument('input', nargs='?', help='Input .fib.gz file or directory (for batch mode)')
-    parser.add_argument('output', nargs='?', help='Output directory')
+    # Required arguments (made optional to show help when missing)
+    parser.add_argument('input', nargs='?', 
+                       help='📁 Input: .fib.gz/.fz file OR directory (for --batch mode)')
+    parser.add_argument('output', nargs='?', 
+                       help='📂 Output: Directory where results will be saved')
     
-    parser.add_argument('-a', '--atlases', 
-                       default=','.join(DEFAULT_CONFIG['atlases']),
-                       help='Comma-separated list of atlases')
+    # Configuration
+    parser.add_argument('--config', type=str,
+                       help='📄 JSON configuration file (recommended - see example_config.json)')
     
-    parser.add_argument('-v', '--values',
-                       default=','.join(DEFAULT_CONFIG['connectivity_values']),
-                       help='Comma-separated list of connectivity values')
-    
-    parser.add_argument('-t', '--tracks', type=int,
-                       default=DEFAULT_CONFIG['track_count'],
-                       help='Number of tracks to generate')
-    
-    parser.add_argument('-j', '--threads', type=int,
-                       default=DEFAULT_CONFIG['thread_count'],
-                       help='Number of threads to use')
-    
-    # Tracking parameters
-    parser.add_argument('--method', type=int, choices=[0, 1, 2],
-                       help='Tracking method: 0=Streamline(Euler), 1=RK4, 2=Voxel tracking')
-    
-    parser.add_argument('--fa_threshold', type=float,
-                       help='FA threshold (0=automatic)')
-    
-    parser.add_argument('--turning_angle', type=float,
-                       help='Maximum turning angle in degrees (0=random 15-90°)')
-    
-    parser.add_argument('--step_size', type=float,
-                       help='Step size in mm (0=random 1-3 voxels)')
-    
-    parser.add_argument('--smoothing', type=float,
-                       help='Smoothing fraction (0-1)')
-    
-    parser.add_argument('--track_voxel_ratio', type=float,
-                       help='Track-to-voxel ratio')
-    
-    parser.add_argument('--connectivity_type', choices=['pass', 'end'],
-                       help='Connectivity type: pass or end')
-    
-    parser.add_argument('--connectivity_threshold', type=float,
-                       help='Connectivity threshold for matrix binarization')
-    
+    # Processing mode
     parser.add_argument('--batch', action='store_true',
-                       help='Process all .fib.gz files in input directory')
-    
-    parser.add_argument('--pattern', default='*.fib.gz',
-                       help='File pattern for batch mode (default: *.fib.gz)')
+                       help='🔄 Batch mode: Process all files in input directory')
     
     parser.add_argument('--pilot', action='store_true',
-                       help='Pilot mode: select random files for testing')
+                       help='🧪 Pilot mode: Test on subset of files first (use with --batch)')
     
     parser.add_argument('--pilot-count', type=int, default=1,
-                       help='Number of files to process in pilot mode (default: 1)')
+                       help='🔢 Number of files for pilot test (default: 1)')
     
-    parser.add_argument('--config', type=str,
-                       help='JSON configuration file')
+    parser.add_argument('--pattern', default='*.fib.gz',
+                       help='🔍 File pattern for batch mode (default: *.fib.gz, also searches .fz)')
+    
+    # Override configuration settings
+    parser.add_argument('-a', '--atlases', 
+                       help='🧠 Override config: Comma-separated atlases (e.g., "AAL3,Brainnetome")')
+    
+    parser.add_argument('-v', '--values',
+                       help='📊 Override config: Comma-separated connectivity metrics')
+    
+    parser.add_argument('-t', '--tracks', type=int,
+                       help='🛤️  Override config: Number of tracks to generate (e.g., 100000)')
+    
+    parser.add_argument('-j', '--threads', type=int,
+                       help='⚡ Override config: Number of processing threads')
+    
+    # Advanced tracking parameters (override config)
+    parser.add_argument('--method', type=int, choices=[0, 1, 2],
+                       help='🎯 Tracking method: 0=Streamline(Euler), 1=RK4, 2=Voxel')
+    
+    parser.add_argument('--fa_threshold', type=float,
+                       help='📉 FA threshold for termination (0=automatic, 0.1-0.3 typical)')
+    
+    parser.add_argument('--turning_angle', type=float,
+                       help='🔄 Max turning angle in degrees (0=auto 15-90°, 35-60° typical)')
+    
+    parser.add_argument('--step_size', type=float,
+                       help='📏 Step size in mm (0=auto 1-3 voxels)')
+    
+    parser.add_argument('--smoothing', type=float,
+                       help='🌊 Smoothing fraction (0-1, higher=smoother tracks)')
+    
+    parser.add_argument('--track_voxel_ratio', type=float,
+                       help='🎲 Seeds per voxel ratio (higher=more tracks per region)')
+    
+    parser.add_argument('--connectivity_type', choices=['pass', 'end'],
+                       help='🔗 Connectivity type: pass=whole tract, end=endpoints only')
+    
+    parser.add_argument('--connectivity_threshold', type=float,
+                       help='🎚️  Connectivity threshold for matrix filtering')
     
     args = parser.parse_args()
+    
+    # Show help if no arguments provided
+    if len(sys.argv) == 1 or (not args.input and not args.output and not args.config):
+        parser.print_help()
+        print("\n💡 TIP: Start with validation:")
+        print("   python validate_setup.py --config example_config.json")
+        print("\n💡 Or see the README.md for detailed examples!")
+        sys.exit(0)
     
     # Load configuration from file if provided
     config = DEFAULT_CONFIG.copy()
     if args.config:
-        with open(args.config, 'r') as f:
-            config.update(json.load(f))
+        try:
+            with open(args.config, 'r') as f:
+                config.update(json.load(f))
+        except FileNotFoundError:
+            print(f"❌ Configuration file not found: {args.config}")
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            print(f"❌ Invalid JSON in configuration file: {e}")
+            sys.exit(1)
     
-    # Override with command line arguments
-    config.update({
-        'atlases': args.atlases.split(','),
-        'connectivity_values': args.values.split(','),
-        'track_count': args.tracks,
-        'thread_count': args.threads
-    })
+    # Override with command line arguments (only if provided)
+    if args.atlases:
+        config['atlases'] = args.atlases.split(',')
+    if args.values:
+        config['connectivity_values'] = args.values.split(',')
+    if args.tracks:
+        config['track_count'] = args.tracks
+    if args.threads:
+        config['thread_count'] = args.threads
     
     # Update tracking parameters if provided
     tracking_params = config.get('tracking_parameters', {})
@@ -895,8 +942,13 @@ Examples:
     
     config['connectivity_options'] = connectivity_options
     
+    # Check for required arguments
     if not args.input or not args.output:
+        print("❌ Error: Both input and output arguments are required!\n")
         parser.print_help()
+        print("\n💡 QUICK START:")
+        print("   python validate_setup.py --config example_config.json")
+        print("   python extract_connectivity_matrices.py --config example_config.json input.fz output/")
         sys.exit(1)
     
     try:
@@ -1021,8 +1073,6 @@ Examples:
     except KeyboardInterrupt:
         print("\n⚠️  Processing interrupted by user")
         sys.exit(1)
-            result = extractor.extract_all_matrices(args.input, args.output)
-            print(f"Processing completed: {result['summary']['successful']}/{result['summary']['total_atlases']} atlases successful")
     
     except Exception as e:
         logging.error(f"Error: {e}")

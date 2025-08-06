@@ -16,12 +16,60 @@ from extract_connectivity_matrices import ConnectivityExtractor, DEFAULT_CONFIG
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Validate DSI Studio setup and configuration")
-    parser.add_argument('--config', type=str, help='Configuration file to validate')
-    parser.add_argument('--test-input', type=str, help='Test input path (file or folder) for validation')
-    parser.add_argument('--pattern', type=str, default='*.fib.gz', help='File pattern to test (for directories)')
+    parser = argparse.ArgumentParser(
+        description="🔍 DSI Studio Setup Validation Tool",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+🎯 PURPOSE: Validate your DSI Studio installation and configuration before processing data
+
+📋 EXAMPLES:
+
+  # Basic validation (uses connectivity_config.json if available)
+  python validate_setup.py
+  
+  # Validate specific configuration
+  python validate_setup.py --config my_config.json
+  
+  # Test with actual data path
+  python validate_setup.py --config my_config.json --test-input /path/to/data/
+  
+  # Test single file
+  python validate_setup.py --test-input subject.fz
+  
+  # Test with different file pattern
+  python validate_setup.py --test-input /data/dir/ --pattern "*.fz"
+
+✅ WHAT IT CHECKS:
+  - DSI Studio installation and accessibility
+  - Configuration file validity
+  - Atlas and metric specifications
+  - Parameter ranges and values
+  - Input path accessibility and file discovery
+  - File format support (.fib.gz and .fz)
+
+💡 RECOMMENDED WORKFLOW:
+  1. Run validation first
+  2. Fix any errors found
+  3. Test with pilot mode
+  4. Run full processing
+
+For more help: see README.md
+        """)
+    
+    parser.add_argument('--config', type=str, 
+                       help='📄 JSON configuration file to validate (default: connectivity_config.json)')
+    parser.add_argument('--test-input', type=str, 
+                       help='🧪 Test input path: file or directory to validate')
+    parser.add_argument('--pattern', type=str, default='*.fib.gz', 
+                       help='🔍 File pattern for directory testing (default: *.fib.gz)')
     
     args = parser.parse_args()
+    
+    # Show help if no arguments provided
+    if len(sys.argv) == 1:
+        parser.print_help()
+        print("\n💡 QUICK START: python validate_setup.py --config example_config.json")
+        sys.exit(0)
     
     # Load configuration
     config = DEFAULT_CONFIG.copy()

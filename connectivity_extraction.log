@@ -1,0 +1,6 @@
+2025-08-06 15:44:44,019 - INFO - 🔍 Checking DSI Studio availability...
+2025-08-06 15:44:44,019 - INFO - 📊 Will process 4 atlases: AAL3, Brainnetome, FreeSurferDKT, FreeSurferDKT_Cortical
+2025-08-06 15:44:44,019 - INFO - 📊 Will extract 7 connectivity metrics: count, ncount, ncount2, mean_length, qa, fa, dti_fa
+2025-08-06 15:44:44,019 - ERROR - ❌ Configuration validation failed
+2025-08-06 15:44:44,019 - ERROR - ❌ 1 error(s) found
+2025-08-06 15:44:44,019 - ERROR -    - DSI Studio check failed: DSI Studio executable not found at: /data/local/software/dsi-studio/dsi_studio
