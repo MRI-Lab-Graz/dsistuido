@@ -174,6 +174,19 @@ class ConnectivityExtractor:
             ]
         )
         self.logger = logging.getLogger(__name__)
+        
+        # Log session header with DSI Studio version
+        self.logger.info("=" * 60)
+        self.logger.info("🧠 DSI STUDIO CONNECTIVITY EXTRACTION SESSION START")
+        self.logger.info("=" * 60)
+        
+        # Try to get and log DSI Studio version early
+        dsi_check = self.check_dsi_studio()
+        if dsi_check['available'] and dsi_check['version']:
+            self.logger.info(f"🔧 DSI Studio Version: {dsi_check['version']}")
+        self.logger.info(f"📁 DSI Studio Path: {dsi_check['path']}")
+        self.logger.info(f"📅 Session Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info("=" * 60)
     
     def check_dsi_studio(self) -> Dict[str, Any]:
         """Check if DSI Studio is available and working properly."""
@@ -194,38 +207,50 @@ class ConnectivityExtractor:
                 result['error'] = f"DSI Studio executable is not executable: {dsi_cmd}"
                 return result
         
-        # Test execution
+        # Test execution with --version (avoids GUI launch)
         try:
-            test_result = subprocess.run(
-                [dsi_cmd, '--help'],
+            version_result = subprocess.run(
+                [dsi_cmd, '--version'],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
             
-            if test_result.returncode == 0:
+            if version_result.returncode == 0:
                 result['available'] = True
-                # Try to extract version info
+                # Extract version info
+                if version_result.stdout:
+                    result['version'] = version_result.stdout.strip()
+                elif version_result.stderr:
+                    # Some versions output to stderr
+                    result['version'] = version_result.stderr.strip()
+                else:
+                    result['version'] = "Version detected but no output"
+            else:
+                # If --version fails, try --help as fallback (but with shorter timeout)
                 try:
-                    version_result = subprocess.run(
-                        [dsi_cmd, '--version'],
+                    help_result = subprocess.run(
+                        [dsi_cmd, '--help'],
                         capture_output=True,
                         text=True,
                         timeout=5
                     )
-                    if version_result.returncode == 0 and version_result.stdout:
-                        result['version'] = version_result.stdout.strip()
-                except:
-                    pass  # Version check is optional
-            else:
-                result['error'] = f"DSI Studio returned error code {test_result.returncode}"
+                    if help_result.returncode == 0:
+                        result['available'] = True
+                        result['version'] = "Version unknown (--help works)"
+                    else:
+                        result['error'] = f"DSI Studio returned error code {version_result.returncode}"
+                except subprocess.TimeoutExpired:
+                    result['error'] = "DSI Studio --help command timed out (GUI launch issue?)"
+                except Exception as e:
+                    result['error'] = f"Error testing DSI Studio --help: {str(e)}"
                 
         except subprocess.TimeoutExpired:
-            result['error'] = "DSI Studio command timed out"
+            result['error'] = "DSI Studio --version command timed out"
         except FileNotFoundError:
             result['error'] = f"DSI Studio command not found: {dsi_cmd}. Check PATH or use absolute path."
         except Exception as e:
-            result['error'] = f"Error running DSI Studio: {str(e)}"
+            result['error'] = f"Error running DSI Studio --version: {str(e)}"
             
         return result
     
@@ -569,10 +594,16 @@ class ConnectivityExtractor:
             results.append(result)
         
         # Save processing summary in logs directory
+        dsi_check = self.check_dsi_studio()
         summary = {
             'input_file': input_file,
             'output_directory': str(run_dir),
             'timestamp': datetime.now().isoformat(),
+            'dsi_studio': {
+                'path': dsi_check['path'],
+                'version': dsi_check.get('version', 'Unknown'),
+                'available': dsi_check['available']
+            },
             'config': self.config,
             'results': results,
             'summary': {
@@ -1039,10 +1070,16 @@ For more help: see README.md
                 print(f"   Ready for full batch processing: {'YES' if successful > 0 else 'NO'}")
             
             # Save batch summary
+            dsi_check = extractor.check_dsi_studio()
             summary_file = os.path.join(args.output, 'batch_processing_summary.json')
             with open(summary_file, 'w') as f:
                 json.dump({
                     'processed_files': batch_results,
+                    'dsi_studio': {
+                        'path': dsi_check['path'],
+                        'version': dsi_check.get('version', 'Unknown'),
+                        'available': dsi_check['available']
+                    },
                     'summary': {
                         'total': len(batch_results),
                         'successful': successful,
@@ -1059,6 +1096,10 @@ For more help: see README.md
             # Single file processing mode
             print(f"📊 Processing single file: {args.input}")
             
+            # Log DSI Studio version at start of single file processing
+            dsi_check = extractor.check_dsi_studio()
+            logging.info(f"DSI Studio: {dsi_check['path']} - Version: {dsi_check.get('version', 'Unknown')}")
+            
             # Validate single input file
             input_validation = extractor.validate_input_path(args.input)
             if not input_validation['valid']:
@@ -1066,11 +1107,9 @@ For more help: see README.md
                 for error in input_validation['errors']:
                     print(f"   ❌ {error}")
                 sys.exit(1)
-            
+
             result = extractor.extract_all_matrices(args.input, args.output)
-            print("✅ Processing completed successfully!")
-            
-    except KeyboardInterrupt:
+            print("✅ Processing completed successfully!")    except KeyboardInterrupt:
         print("\n⚠️  Processing interrupted by user")
         sys.exit(1)
     
