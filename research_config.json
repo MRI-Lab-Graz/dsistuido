@@ -1,0 +1,67 @@
+{
+  "comment": "Research-Optimized DSI Studio Configuration with Explicit Parameters",
+  
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
+  
+  "atlases": [
+    "FreeSurferDKT_Cortical",
+    "Brainnetome", 
+    "HCPex"
+  ],
+  "connectivity_values": [
+    "count",
+    "ncount",
+    "mean_length"
+  ],
+  "track_count": 5000000,
+  "thread_count": 8,
+  "tracking_parameters": {
+    "method": 0,
+    "otsu_threshold": 0.6,
+    "fa_threshold": 0.05,
+    "turning_angle": 60.0,
+    "step_size": 0.5,
+    "smoothing": 0.0,
+    "min_length": 30.0,
+    "max_length": 300.0,
+    "track_voxel_ratio": 2.0,
+    "check_ending": 0,
+    "random_seed": 0,
+    "dt_threshold": 0.2
+  },
+  "connectivity_options": {
+    "connectivity_type": "pass",
+    "connectivity_threshold": 0.001,
+    "connectivity_output": "matrix"
+  },
+  
+  "PARAMETER_EXPLANATIONS": {
+    "FIBER_TRACKING_QUALITY": {
+      "fa_threshold": "0.05 = Stop tracking when FA drops below 0.05 (white matter boundary)",
+      "turning_angle": "60° = Maximum angle change allowed per step (prevents unrealistic curves)",
+      "step_size": "0.5mm = Distance between tracking steps (smaller = more accurate but slower)",
+      "min_length": "30mm = Discard fibers shorter than 30mm (removes noise)",
+      "max_length": "300mm = Stop fibers longer than 300mm (prevents runaway tracking)"
+    },
+    
+    "WHY_THESE_VALUES": {
+      "fa_threshold_0.05": "Standard in literature - distinguishes white/gray matter",
+      "turning_angle_60": "Anatomically plausible - allows curves but prevents loops",
+      "step_size_0.5": "Good balance: accurate but not too slow (typical: 0.25-1.0mm)",
+      "min_length_30": "Filters out noise while keeping short association fibers",
+      "max_length_300": "Captures long tracts (corpus callosum ~120mm) with safety margin"
+    },
+    
+    "TRACKING_PERFORMANCE": {
+      "track_count_5M": "5 million tracks = High-quality research standard",
+      "processing_time": "~5-15 minutes per file (vs 2 min with 100k)",
+      "quality_improvement": "Much better sampling of weak connections",
+      "memory_usage": "Higher RAM usage but manageable on modern systems"
+    },
+      "conservative_vs_liberal": "These are moderate/conservative settings",
+      "more_conservative": "fa_threshold=0.1, turning_angle=45°, min_length=50mm",
+      "more_liberal": "fa_threshold=0.02, turning_angle=75°, min_length=20mm",
+      "study_consistency": "Use same parameters across all subjects in your study!"
+    }
+  }
+}
