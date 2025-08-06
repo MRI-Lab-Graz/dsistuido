@@ -1,0 +1,83 @@
+{
+  "comment": "DSI Studio Connectivity Matrix Extraction Configuration - Based on source code analysis",
+  
+  "input_settings": {
+    "input_folder": "/path/to/your/fib/files",
+    "file_pattern": "*.fib.gz",
+    "recursive_search": true,
+    "pilot_mode": false,
+    "pilot_count": 1,
+    "comment": "Set input_folder to batch process all files in a directory. Use pilot_mode for testing."
+  },
+  
+  "atlases": [
+    "AAL",
+    "AAL2", 
+    "AAL3",
+    "Brodmann",
+    "HCP-MMP",
+    "AICHA",
+    "Talairach",
+    "FreeSurferDKT",
+    "FreeSurferDKT_Cortical",
+    "Schaefer100",
+    "Schaefer200",
+    "Schaefer400",
+    "Gordon333",
+    "Power264"
+  ],
+  "connectivity_values": [
+    "count",
+    "ncount",
+    "ncount2",
+    "mean_length",
+    "qa",
+    "fa",
+    "dti_fa",
+    "md",
+    "ad", 
+    "rd",
+    "iso",
+    "rdi",
+    "ndi",
+    "dti_ad",
+    "dti_rd",
+    "dti_md"
+  ],
+  "track_count": 100000,
+  "thread_count": 8,
+  "dsi_studio_cmd": "dsi_studio",
+  "tracking_parameters": {
+    "method": 0,
+    "otsu_threshold": 0.6,
+    "fa_threshold": 0.0,
+    "turning_angle": 0.0,
+    "step_size": 0.0,
+    "smoothing": 0.0,
+    "min_length": 0,
+    "max_length": 0,
+    "track_voxel_ratio": 2.0,
+    "check_ending": 0,
+    "random_seed": 0,
+    "dt_threshold": 0.2
+  },
+  "connectivity_options": {
+    "connectivity_type": "pass",
+    "connectivity_threshold": 0.001,
+    "connectivity_output": "matrix,connectogram,measure"
+  },
+  "comments": {
+    "method": "Tracking algorithm: 0=Streamline(Euler), 1=RK4, 2=Voxel tracking",
+    "otsu_threshold": "Default Otsu threshold (0.1-1.0)",
+    "fa_threshold": "FA threshold for termination (0=automatic)",
+    "turning_angle": "Maximum turning angle in degrees (0=random 15-90°)",
+    "step_size": "Step size in mm (0=random 1-3 voxels)",
+    "smoothing": "Fraction of previous direction to mix in (0-1)",
+    "min_length": "Minimum fiber length in mm (0=dataset specific)",
+    "max_length": "Maximum fiber length in mm (0=dataset specific)",
+    "track_voxel_ratio": "Seeds-per-voxel ratio",
+    "check_ending": "Drop tracks not terminating in ROI (0=off, 1=on)",
+    "connectivity_type": "pass=whole tract, end=tract endpoints only",
+    "connectivity_values_note": "Available metrics depend on reconstruction method used"
+  }
+}
