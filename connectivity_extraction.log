@@ -16,3 +16,15 @@
 2025-08-06 16:00:39,586 - ERROR - ❌ Configuration validation failed
 2025-08-06 16:00:39,586 - ERROR - ❌ 1 error(s) found
 2025-08-06 16:00:39,586 - ERROR -    - DSI Studio check failed: DSI Studio executable not found at: /data/local/software/dsi-studio/dsi_studio
+2025-08-06 16:08:15,900 - INFO - ============================================================
+2025-08-06 16:08:15,900 - INFO - 🧠 DSI STUDIO CONNECTIVITY EXTRACTION SESSION START
+2025-08-06 16:08:15,900 - INFO - ============================================================
+2025-08-06 16:08:15,900 - INFO - 📁 DSI Studio Path: /data/local/software/dsi-studio/dsi_studio
+2025-08-06 16:08:15,900 - INFO - 📅 Session Time: 2025-08-06 16:08:15
+2025-08-06 16:08:15,900 - INFO - ============================================================
+2025-08-06 16:08:15,900 - INFO - 🔍 Checking DSI Studio availability...
+2025-08-06 16:08:15,900 - INFO - 📊 Will process 4 atlases: FreeSurferDKT_Cortical, Brainnetome, HCPex, JulichBrain
+2025-08-06 16:08:15,900 - INFO - 📊 Will extract 7 connectivity metrics: count, ncount, ncount2, mean_length, qa, fa, dti_fa
+2025-08-06 16:08:15,900 - ERROR - ❌ Configuration validation failed
+2025-08-06 16:08:15,900 - ERROR - ❌ 1 error(s) found
+2025-08-06 16:08:15,900 - ERROR -    - DSI Studio check failed: DSI Studio executable not found at: /data/local/software/dsi-studio/dsi_studio

@@ -4,10 +4,10 @@
   "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
   
   "atlases": [
-    "AAL3",
+    "FreeSurferDKT_Cortical",
     "Brainnetome",
-    "FreeSurferDKT",
-    "FreeSurferDKT_Cortical"
+    "HCPex",
+    "JulichBrain"
   ],
   "connectivity_values": [
     "count",
