@@ -667,7 +667,8 @@ class ConnectivityExtractor:
             summary['csv_conversion'] = csv_conversion
         else:
             self.logger.info("⏭️ Skipping CSV conversion (disabled)")
-            summary['csv_conversion'] = {'success': True, 'total_converted': 0, 'skipped': True}
+            csv_conversion = {'success': True, 'total_converted': 0, 'skipped': True}
+            summary['csv_conversion'] = csv_conversion
         
         self.logger.info(f"Extraction completed: {summary['summary']['successful']}/{summary['summary']['total_atlases']} successful")
         if csv_conversion.get('success') and csv_conversion.get('total_converted', 0) > 0:
@@ -795,8 +796,8 @@ from pathlib import Path
 
 # Configuration
 BASE_DIR = Path(__file__).parent
-ATLASES = {self.config['atlases']}
-METRICS = {self.config['connectivity_values']}
+ATLASES = {repr(self.config['atlases'])}
+METRICS = {repr(self.config['connectivity_values'])}
 
 def load_connectivity_matrix(atlas, metric):
     """Load connectivity matrix for specific atlas and metric."""
@@ -1549,3 +1550,7 @@ For more help: see README.md
     except Exception as e:
         logging.error(f"Error: {e}")
         sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
