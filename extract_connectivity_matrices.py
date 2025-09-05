@@ -654,15 +654,12 @@ class ConnectivityExtractor:
         # Create analysis-ready summary files
         self._create_analysis_summary(run_dir, base_name, results)
         
-        # Convert .mat files to CSV format (check config and command line options)
+        # Convert DSI Studio outputs to CSV format (check config)
         convert_to_csv = True  # Default to True for user convenience
         
-        if args.no_csv:
-            convert_to_csv = False
-        elif args.csv:
-            convert_to_csv = True
-        elif 'convert_to_csv' in config.get('connectivity_options', {}):
-            convert_to_csv = config['connectivity_options']['convert_to_csv']
+        # Check if CSV conversion is configured
+        if 'convert_to_csv' in self.config.get('connectivity_options', {}):
+            convert_to_csv = self.config['connectivity_options']['convert_to_csv']
         
         if convert_to_csv:
             self.logger.info("🔄 Converting all DSI Studio outputs to CSV format...")
@@ -1395,6 +1392,15 @@ For more help: see README.md
         connectivity_options['connectivity_type'] = args.connectivity_type
     if args.connectivity_threshold is not None:
         connectivity_options['connectivity_threshold'] = args.connectivity_threshold
+    
+    config['connectivity_options'] = connectivity_options
+    
+    # Handle CSV conversion options from command line
+    if args.no_csv:
+        connectivity_options['convert_to_csv'] = False
+    elif args.csv:
+        connectivity_options['convert_to_csv'] = True
+    # If neither --csv nor --no-csv specified, use config file setting (or default to True)
     
     config['connectivity_options'] = connectivity_options
     
