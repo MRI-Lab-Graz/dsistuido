@@ -63,5 +63,4 @@
       "more_liberal": "fa_threshold=0.02, turning_angle=75°, min_length=20mm",
       "study_consistency": "Use same parameters across all subjects in your study!"
     }
-  }
 }
