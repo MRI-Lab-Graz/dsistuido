@@ -32,7 +32,8 @@
   "connectivity_options": {
     "connectivity_type": "pass",
     "connectivity_threshold": 0.001,
-    "connectivity_output": "matrix"
+    "connectivity_output": "matrix,connectogram,measure",
+    "convert_to_csv": true
   },
   
   "PARAMETER_EXPLANATIONS": {

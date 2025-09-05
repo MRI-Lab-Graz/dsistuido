@@ -23,6 +23,16 @@ import glob
 from typing import List, Optional, Dict, Any
 from typing import List, Dict, Optional
 
+# Add scipy for .mat file reading and numpy for array handling
+try:
+    import scipy.io
+    import numpy as np
+    MAT_SUPPORT = True
+except ImportError:
+    MAT_SUPPORT = False
+    print("⚠️ Warning: scipy not available - .mat to CSV conversion disabled")
+    print("   Install with: pip install scipy")
+
 # Default configuration based on DSI Studio source code analysis
 DEFAULT_CONFIG = {
     # Common atlases - Note: Actual availability depends on your DSI Studio installation
@@ -644,7 +654,29 @@ class ConnectivityExtractor:
         # Create analysis-ready summary files
         self._create_analysis_summary(run_dir, base_name, results)
         
+        # Convert .mat files to CSV format (check config and command line options)
+        convert_to_csv = True  # Default to True for user convenience
+        
+        if args.no_csv:
+            convert_to_csv = False
+        elif args.csv:
+            convert_to_csv = True
+        elif 'convert_to_csv' in config.get('connectivity_options', {}):
+            convert_to_csv = config['connectivity_options']['convert_to_csv']
+        
+        if convert_to_csv:
+            self.logger.info("🔄 Converting all DSI Studio outputs to CSV format...")
+            csv_conversion = self.convert_all_outputs_to_csv(run_dir)
+            summary['csv_conversion'] = csv_conversion
+        else:
+            self.logger.info("⏭️ Skipping CSV conversion (disabled)")
+            summary['csv_conversion'] = {'success': True, 'total_converted': 0, 'skipped': True}
+        
         self.logger.info(f"Extraction completed: {summary['summary']['successful']}/{summary['summary']['total_atlases']} successful")
+        if csv_conversion.get('success') and csv_conversion.get('total_converted', 0) > 0:
+            total_converted = csv_conversion['total_converted']
+            self.logger.info(f"📊 CSV files generated: {total_converted} files converted (.mat, .connectogram.txt, .network_measures.txt)")
+        
         return summary
 
     def _create_analysis_summary(self, run_dir: Path, base_name: str, results: List[Dict]):
@@ -657,29 +689,67 @@ class ConnectivityExtractor:
 ## Directory Structure
 
 📁 **by_atlas/** - Results organized by brain atlas
-   └── Each atlas has its own subdirectory with all connectivity matrices
+   └── Each atlas has its own subdirectory with all connectivity outputs
    
 📁 **by_metric/** - Results organized by connectivity metric  
    └── Each metric has symlinks/copies from all atlases for easy comparison
    
-📁 **combined/** - All connectivity matrices in one place
-   └── Files renamed for easy identification: {base_name}_[atlas]_[metric].connectivity.*
+📁 **combined/** - All connectivity outputs in one place
+   └── Files renamed for easy identification: {base_name}_[atlas]_[metric].*
    
 📁 **logs/** - Processing logs and summaries
    └── extraction_summary.json, processing_results.csv, connectivity_extraction.log
 
+## Output File Types
+
+🔢 **Connectivity Matrices** (.mat → .csv)
+   - Square matrices showing connectivity between brain regions
+   - Original: *.connectivity.mat (MATLAB format)
+   - Converted: *.connectivity.csv (with region labels), *.connectivity.simple.csv (numbers only)
+
+🌐 **Connectograms** (.connectogram.txt → .csv) 
+   - Edge list format for network visualization (CIRCUS compatible)
+   - Format: source_region, target_region, connectivity_value
+   - Great for network analysis and graph visualization tools
+
+📊 **Network Measures** (.network_measures.txt → .csv)
+   - Graph-theoretic measures (clustering, path length, efficiency, etc.)
+   - Pre-calculated network statistics for each atlas
+   - Ready for statistical analysis
+
 ## Quick Analysis Commands
 
-### Load all connectivity matrices of same type:
+### Load connectivity matrices:
 ```python
-import glob
-import scipy.io
+import pandas as pd
+import numpy as np
 
-# Load all 'count' matrices
-count_matrices = []
-for file in glob.glob('by_metric/count/*.connectivity.mat'):
-    mat = scipy.io.loadmat(file)
-    count_matrices.append(mat['connectivity'])
+# Load CSV matrix (easier)
+matrix_df = pd.read_csv('by_atlas/AAL3/subject_AAL3.connectivity.csv', index_col=0)
+
+# Load simple CSV as numpy array  
+matrix = np.loadtxt('by_atlas/AAL3/subject_AAL3.connectivity.simple.csv', delimiter=',')
+```
+
+### Load connectogram (edge list):
+```python
+# Load connectogram for network analysis
+edges_df = pd.read_csv('by_atlas/AAL3/subject_AAL3.connectogram.csv')
+print(f"Found {len(edges_df)} connections")
+
+# Convert to NetworkX graph
+import networkx as nx
+G = nx.from_pandas_edgelist(edges_df, 
+                           source='source_region', 
+                           target='target_region', 
+                           edge_attr='connectivity_value')
+```
+
+### Load network measures:
+```python
+# Load pre-calculated network statistics
+measures_df = pd.read_csv('by_atlas/AAL3/subject_AAL3.network_measures.csv')
+print("Available measures:", measures_df.columns.tolist())
 ```
 
 ### Compare atlases for same metric:
@@ -789,7 +859,347 @@ if __name__ == "__main__":
         import stat
         analysis_script_path = run_dir / "quick_analysis.py"
         analysis_script_path.chmod(analysis_script_path.stat().st_mode | stat.S_IEXEC)
+    
+    def convert_mat_to_csv(self, mat_file_path: Path, atlas: str) -> Dict[str, str]:
+        """Convert .mat connectivity matrix to CSV format.
+        
+        Parameters:
+        -----------
+        mat_file_path : Path
+            Path to the .mat file
+        atlas : str
+            Atlas name for informative naming
+            
+        Returns:
+        --------
+        Dict[str, str]
+            Dictionary with conversion results and output paths
+        """
+        if not MAT_SUPPORT:
+            return {'success': False, 'error': 'scipy not available for .mat conversion'}
+            
+        try:
+            # Load .mat file
+            mat_data = scipy.io.loadmat(str(mat_file_path))
+            
+            # Find the connectivity matrix (common keys: 'connectivity', 'matrix', 'data')
+            connectivity_key = None
+            for key in ['connectivity', 'matrix', 'data']:
+                if key in mat_data:
+                    connectivity_key = key
+                    break
+            
+            if connectivity_key is None:
+                # List available keys for debugging
+                available_keys = [k for k in mat_data.keys() if not k.startswith('__')]
+                self.logger.warning(f"No standard connectivity key found in {mat_file_path.name}")
+                self.logger.warning(f"Available keys: {available_keys}")
+                # Use the first non-metadata key
+                if available_keys:
+                    connectivity_key = available_keys[0]
+                else:
+                    return {'success': False, 'error': 'No data found in .mat file'}
+            
+            connectivity_matrix = mat_data[connectivity_key]
+            
+            # Convert to DataFrame for better CSV output
+            if connectivity_matrix.ndim == 2:
+                # Create meaningful row/column names if available
+                if 'labels' in mat_data:
+                    labels = [str(label[0]) if hasattr(label, '__getitem__') else str(label) 
+                             for label in mat_data['labels'].flatten()]
+                    if len(labels) == connectivity_matrix.shape[0]:
+                        df = pd.DataFrame(connectivity_matrix, index=labels, columns=labels)
+                    else:
+                        df = pd.DataFrame(connectivity_matrix)
+                else:
+                    # Use generic row/column names
+                    n_regions = connectivity_matrix.shape[0]
+                    region_names = [f'{atlas}_region_{i+1:03d}' for i in range(n_regions)]
+                    df = pd.DataFrame(connectivity_matrix, index=region_names, columns=region_names)
+                
+                # Save as CSV
+                csv_path = mat_file_path.with_suffix('.csv')
+                df.to_csv(csv_path, index=True)
+                
+                # Also save a simplified version without row names for easy loading
+                simple_csv_path = mat_file_path.with_suffix('.simple.csv')
+                np.savetxt(simple_csv_path, connectivity_matrix, delimiter=',', fmt='%.6f')
+                
+                return {
+                    'success': True,
+                    'csv_path': str(csv_path),
+                    'simple_csv_path': str(simple_csv_path),
+                    'matrix_shape': connectivity_matrix.shape,
+                    'connectivity_key': connectivity_key
+                }
+            else:
+                return {'success': False, 'error': f'Unexpected matrix dimensions: {connectivity_matrix.shape}'}
+                
+        except Exception as e:
+            self.logger.error(f"Failed to convert {mat_file_path.name} to CSV: {str(e)}")
+            return {'success': False, 'error': str(e)}
 
+    def convert_all_outputs_to_csv(self, output_dir: Path) -> Dict[str, Any]:
+        """Convert all DSI Studio outputs (.mat, .connectogram.txt, .network_measures.txt) to CSV format.
+        
+        Parameters:
+        -----------
+        output_dir : Path
+            Output directory containing DSI Studio output files
+            
+        Returns:
+        --------
+        Dict[str, Any]
+            Summary of conversion results for all file types
+        """
+        conversion_summary = {
+            'success': True,
+            'mat_conversion': {},
+            'connectogram_conversion': {},
+            'measures_conversion': {},
+            'total_converted': 0
+        }
+        
+        # Convert .mat files (existing functionality)
+        if MAT_SUPPORT:
+            self.logger.info("🔄 Converting .mat files to CSV...")
+            mat_conversion = self.convert_all_mats_to_csv(output_dir)
+            conversion_summary['mat_conversion'] = mat_conversion
+            conversion_summary['total_converted'] += mat_conversion.get('converted', 0)
+        else:
+            self.logger.warning("scipy not available - skipping .mat to CSV conversion")
+            conversion_summary['mat_conversion'] = {'success': False, 'error': 'scipy not available'}
+        
+        # Convert .connectogram.txt files
+        self.logger.info("🔄 Converting .connectogram.txt files...")
+        connectogram_conversion = self.convert_connectogram_files(output_dir)
+        conversion_summary['connectogram_conversion'] = connectogram_conversion
+        conversion_summary['total_converted'] += connectogram_conversion.get('converted', 0)
+        
+        # Convert .network_measures.txt files  
+        self.logger.info("🔄 Converting .network_measures.txt files...")
+        measures_conversion = self.convert_measures_files(output_dir)
+        conversion_summary['measures_conversion'] = measures_conversion
+        conversion_summary['total_converted'] += measures_conversion.get('converted', 0)
+        
+        # Save comprehensive conversion log
+        conversion_log = output_dir / "logs" / "all_outputs_conversion_summary.json"
+        if conversion_log.parent.exists():
+            with open(conversion_log, 'w') as f:
+                json.dump(conversion_summary, f, indent=2)
+        
+        total_converted = conversion_summary['total_converted']
+        self.logger.info(f"📊 All outputs conversion complete: {total_converted} files converted to CSV")
+        
+        return conversion_summary
+
+    def convert_connectogram_files(self, output_dir: Path) -> Dict[str, Any]:
+        """Convert .connectogram.txt files to CSV format.
+        
+        Parameters:
+        -----------
+        output_dir : Path
+            Output directory containing .connectogram.txt files
+            
+        Returns:
+        --------
+        Dict[str, Any]
+            Summary of connectogram conversion results
+        """
+        # Find all .connectogram.txt files
+        connectogram_files = list(output_dir.rglob('*.connectogram.txt'))
+        
+        if not connectogram_files:
+            self.logger.info("No .connectogram.txt files found for conversion")
+            return {'success': True, 'converted': 0, 'files': []}
+        
+        self.logger.info(f"Converting {len(connectogram_files)} .connectogram.txt files...")
+        
+        conversion_results = []
+        successful_conversions = 0
+        
+        for connectogram_file in connectogram_files:
+            try:
+                # Read connectogram file (typically tab-separated or space-separated)
+                # Connectogram format is usually: source_region, target_region, connectivity_value
+                df = pd.read_csv(connectogram_file, sep='\t', header=None)
+                
+                # If tab separation doesn't work, try space separation
+                if df.shape[1] == 1:
+                    df = pd.read_csv(connectogram_file, sep=' ', header=None)
+                
+                # Add meaningful column names
+                if df.shape[1] == 3:
+                    df.columns = ['source_region', 'target_region', 'connectivity_value']
+                elif df.shape[1] > 3:
+                    df.columns = ['source_region', 'target_region', 'connectivity_value'] + [f'extra_col_{i}' for i in range(df.shape[1] - 3)]
+                
+                # Save as CSV
+                csv_path = connectogram_file.with_suffix('.csv')
+                df.to_csv(csv_path, index=False)
+                
+                successful_conversions += 1
+                self.logger.info(f"✓ Converted {connectogram_file.name} → CSV ({df.shape[0]} connections)")
+                
+                conversion_results.append({
+                    'success': True,
+                    'original_file': str(connectogram_file),
+                    'csv_path': str(csv_path),
+                    'connections_count': df.shape[0],
+                    'columns': df.shape[1]
+                })
+                
+            except Exception as e:
+                self.logger.warning(f"✗ Failed to convert {connectogram_file.name}: {str(e)}")
+                conversion_results.append({
+                    'success': False,
+                    'original_file': str(connectogram_file),
+                    'error': str(e)
+                })
+        
+        return {
+            'success': True,
+            'total_files': len(connectogram_files),
+            'converted': successful_conversions,
+            'failed': len(connectogram_files) - successful_conversions,
+            'files': conversion_results
+        }
+
+    def convert_measures_files(self, output_dir: Path) -> Dict[str, Any]:
+        """Convert .network_measures.txt files to CSV format.
+        
+        Parameters:
+        -----------
+        output_dir : Path
+            Output directory containing .network_measures.txt files
+            
+        Returns:
+        --------
+        Dict[str, Any]
+            Summary of network measures conversion results
+        """
+        # Find all .network_measures.txt files
+        measures_files = list(output_dir.rglob('*.network_measures.txt'))
+        
+        if not measures_files:
+            self.logger.info("No .network_measures.txt files found for conversion")
+            return {'success': True, 'converted': 0, 'files': []}
+        
+        self.logger.info(f"Converting {len(measures_files)} .network_measures.txt files...")
+        
+        conversion_results = []
+        successful_conversions = 0
+        
+        for measures_file in measures_files:
+            try:
+                # Read network measures file (typically has headers and is tab/space separated)
+                # Try tab separation first
+                try:
+                    df = pd.read_csv(measures_file, sep='\t')
+                except:
+                    # If tab doesn't work, try space separation
+                    df = pd.read_csv(measures_file, sep=' ')
+                
+                # Clean up column names (remove extra spaces)
+                df.columns = df.columns.str.strip()
+                
+                # Save as CSV
+                csv_path = measures_file.with_suffix('.csv')
+                df.to_csv(csv_path, index=False)
+                
+                successful_conversions += 1
+                self.logger.info(f"✓ Converted {measures_file.name} → CSV ({df.shape[0]} measures)")
+                
+                conversion_results.append({
+                    'success': True,
+                    'original_file': str(measures_file),
+                    'csv_path': str(csv_path),
+                    'measures_count': df.shape[0],
+                    'metrics': list(df.columns) if df.shape[1] > 0 else []
+                })
+                
+            except Exception as e:
+                self.logger.warning(f"✗ Failed to convert {measures_file.name}: {str(e)}")
+                conversion_results.append({
+                    'success': False,
+                    'original_file': str(measures_file),
+                    'error': str(e)
+                })
+        
+        return {
+            'success': True,
+            'total_files': len(measures_files),
+            'converted': successful_conversions,
+            'failed': len(measures_files) - successful_conversions,
+            'files': conversion_results
+        }
+        """Convert all .mat files in output directory to CSV format.
+        
+        Parameters:
+        -----------
+        output_dir : Path
+            Output directory containing .mat files
+            
+        Returns:
+        --------
+        Dict[str, Any]
+            Summary of conversion results
+        """
+        if not MAT_SUPPORT:
+            self.logger.warning("scipy not available - skipping .mat to CSV conversion")
+            return {'success': False, 'error': 'scipy not available'}
+        
+        # Find all .mat files in the output directory
+        mat_files = list(output_dir.rglob('*.mat'))
+        
+        if not mat_files:
+            self.logger.info("No .mat files found for conversion")
+            return {'success': True, 'converted': 0, 'files': []}
+        
+        self.logger.info(f"Converting {len(mat_files)} .mat files to CSV...")
+        
+        conversion_results = []
+        successful_conversions = 0
+        
+        for mat_file in mat_files:
+            # Extract atlas name from file path or filename
+            atlas = "unknown"
+            if "by_atlas" in mat_file.parts:
+                atlas_idx = mat_file.parts.index("by_atlas")
+                if atlas_idx + 1 < len(mat_file.parts):
+                    atlas = mat_file.parts[atlas_idx + 1]
+            
+            result = self.convert_mat_to_csv(mat_file, atlas)
+            result['mat_file'] = str(mat_file)
+            result['atlas'] = atlas
+            
+            if result['success']:
+                successful_conversions += 1
+                self.logger.info(f"✓ Converted {mat_file.name} → CSV")
+            else:
+                self.logger.warning(f"✗ Failed to convert {mat_file.name}: {result.get('error', 'Unknown error')}")
+            
+            conversion_results.append(result)
+        
+        # Create conversion summary
+        summary = {
+            'success': True,
+            'total_files': len(mat_files),
+            'converted': successful_conversions,
+            'failed': len(mat_files) - successful_conversions,
+            'files': conversion_results
+        }
+        
+        # Save conversion log
+        conversion_log = output_dir / "logs" / "csv_conversion_summary.json"
+        if conversion_log.parent.exists():
+            with open(conversion_log, 'w') as f:
+                json.dump(summary, f, indent=2)
+        
+        self.logger.info(f"CSV conversion complete: {successful_conversions}/{len(mat_files)} files converted")
+        
+        return summary
 def create_batch_processor(input_dir: str, output_dir: str, pattern: str = "*.fib.gz") -> List[Dict]:
     """Process multiple fiber files in batch."""
     extractor = ConnectivityExtractor()
@@ -922,6 +1332,12 @@ For more help: see README.md
     
     parser.add_argument('--connectivity_threshold', type=float,
                        help='🎚️  Connectivity threshold for matrix filtering')
+    
+    parser.add_argument('--csv', action='store_true',
+                       help='📊 Convert .mat files to CSV format (requires scipy)')
+    
+    parser.add_argument('--no-csv', action='store_true', 
+                       help='🚫 Skip automatic .mat to CSV conversion')
     
     args = parser.parse_args()
     
@@ -1127,6 +1543,3 @@ For more help: see README.md
     except Exception as e:
         logging.error(f"Error: {e}")
         sys.exit(1)
-
-if __name__ == '__main__':
-    main()
