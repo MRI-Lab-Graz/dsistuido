@@ -938,6 +938,58 @@ if __name__ == "__main__":
             self.logger.error(f"Failed to convert {mat_file_path.name} to CSV: {str(e)}")
             return {'success': False, 'error': str(e)}
 
+    def convert_all_mats_to_csv(self, output_dir: Path) -> Dict[str, Any]:
+        """Convert all .mat files in output directory to CSV format.
+        
+        Parameters:
+        -----------
+        output_dir : Path
+            Output directory containing .mat files
+            
+        Returns:
+        --------
+        Dict[str, Any]
+            Summary of .mat conversion results
+        """
+        # Find all .mat files
+        mat_files = list(output_dir.rglob('*.mat'))
+        
+        if not mat_files:
+            self.logger.info("No .mat files found for conversion")
+            return {'success': True, 'converted': 0, 'files': []}
+        
+        self.logger.info(f"Converting {len(mat_files)} .mat files...")
+        
+        conversion_results = []
+        successful_conversions = 0
+        
+        for mat_file in mat_files:
+            # Extract atlas name from file path for better naming
+            atlas = 'unknown'
+            if 'by_atlas' in str(mat_file):
+                parts = str(mat_file).split('by_atlas')
+                if len(parts) > 1:
+                    atlas_part = parts[1].strip('/').split('/')[0]
+                    if atlas_part:
+                        atlas = atlas_part
+            
+            result = self.convert_mat_to_csv(mat_file, atlas)
+            
+            if result.get('success'):
+                successful_conversions += 1
+                conversion_results.append(result)
+            else:
+                self.logger.warning(f"Failed to convert {mat_file.name}: {result.get('error', 'Unknown error')}")
+                conversion_results.append(result)
+        
+        return {
+            'success': True,
+            'total_files': len(mat_files),
+            'converted': successful_conversions,
+            'failed': len(mat_files) - successful_conversions,
+            'files': conversion_results
+        }
+
     def convert_all_outputs_to_csv(self, output_dir: Path) -> Dict[str, Any]:
         """Convert all DSI Studio outputs (.mat, .connectogram.txt, .network_measures.txt) to CSV format.
         
