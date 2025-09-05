@@ -733,7 +733,7 @@ matrix = np.loadtxt('by_atlas/AAL3/subject_AAL3.connectivity.simple.csv', delimi
 ```python
 # Load connectogram for network analysis
 edges_df = pd.read_csv('by_atlas/AAL3/subject_AAL3.connectogram.csv')
-print(f"Found {len(edges_df)} connections")
+print(f"Found {{len(edges_df)}} connections")
 
 # Convert to NetworkX graph
 import networkx as nx
