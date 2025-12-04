@@ -9,11 +9,14 @@ Usage: python validate_setup.py [--config connectivity_config.json]
 """
 
 import sys
+import os
 import json
 import argparse
 from pathlib import Path
 from extract_connectivity_matrices import ConnectivityExtractor, DEFAULT_CONFIG
 
+# Force Qt to use minimal platform for headless execution
+# os.environ['QT_QPA_PLATFORM'] = 'minimal'
 
 def main():
     parser = argparse.ArgumentParser(

@@ -1,0 +1,287 @@
+{
+  "comment": "Configuration for DSI Studio Connectometry Analysis (--action=cnt)",
+  "description": "This file defines parameters and their ranges for batch connectometry analysis",
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
+  "core_parameters": {
+    "source": {
+      "description": "Path to the db.fib.gz connectometry database file",
+      "type": "file_path",
+      "required": true,
+      "value": "/path/to/study.db.fib.gz"
+    },
+    "index_name": {
+      "description": "Diffusion metric to analyze",
+      "type": "string",
+      "required": true,
+      "options": [
+        "qa",
+        "dti_fa",
+        "fa",
+        "md",
+        "ad",
+        "rd",
+        "iso",
+        "rdi",
+        "ndi"
+      ],
+      "default": "qa",
+      "value": "qa"
+    },
+    "demo": {
+      "description": "Path to demographic CSV or text file with subject variables",
+      "type": "file_path",
+      "required": true,
+      "value": "/path/to/demographics.csv"
+    },
+    "variable_list": {
+      "description": "Study variables for regression (comma-separated indices)",
+      "type": "string",
+      "required": true,
+      "example": "0,1,2",
+      "value": "0,1,2"
+    },
+    "voi": {
+      "description": "Variable of interest for multiple regression (0-indexed) or 'longitudinal'",
+      "type": "string_or_int",
+      "required": true,
+      "example": "1 or longitudinal",
+      "value": 1
+    }
+  },
+  "threshold_parameters": {
+    "t_threshold": {
+      "description": "T-statistic threshold for correlational tracking (use this OR effect_size)",
+      "type": "float",
+      "default": 2.5,
+      "range": [
+        1.5,
+        4.0
+      ],
+      "step": 0.5,
+      "values": [
+        2.0,
+        2.5,
+        3.0
+      ]
+    },
+    "effect_size": {
+      "description": "Effect size threshold (use this OR t_threshold)",
+      "type": "float",
+      "default": 0.3,
+      "range": [
+        0.1,
+        0.5
+      ],
+      "step": 0.1,
+      "values": [
+        0.2,
+        0.3,
+        0.4
+      ]
+    },
+    "length_threshold": {
+      "description": "Minimum tracking length in voxel distance",
+      "type": "int",
+      "default": 20,
+      "range": [
+        10,
+        50
+      ],
+      "step": 10,
+      "values": [
+        20,
+        30,
+        40
+      ]
+    },
+    "fdr_threshold": {
+      "description": "FDR threshold for false discovery rate control (0 to disable)",
+      "type": "float",
+      "default": 0,
+      "range": [
+        0,
+        0.1
+      ],
+      "step": 0.01,
+      "values": [
+        0,
+        0.05
+      ]
+    }
+  },
+  "analysis_parameters": {
+    "permutation": {
+      "description": "Number of permutations for statistical analysis",
+      "type": "int",
+      "default": 2000,
+      "range": [
+        1000,
+        5000
+      ],
+      "step": 1000,
+      "values": [
+        2000,
+        4000
+      ]
+    },
+    "thread_count": {
+      "description": "Number of threads for computation",
+      "type": "int",
+      "default": 8,
+      "range": [
+        1,
+        16
+      ],
+      "values": [
+        4,
+        8,
+        16
+      ]
+    },
+    "exclude_cb": {
+      "description": "Exclude cerebellum from analysis (1=yes, 0=no)",
+      "type": "int",
+      "default": 1,
+      "options": [
+        0,
+        1
+      ],
+      "value": 1
+    },
+    "normalize_iso": {
+      "description": "Normalize QA or RDI values by ISO for robustness (1=yes, 0=no)",
+      "type": "int",
+      "default": 1,
+      "options": [
+        0,
+        1
+      ],
+      "value": 1
+    },
+    "tip_iteration": {
+      "description": "Number of pruning iterations to reduce noise",
+      "type": "int",
+      "default": 16,
+      "range": [
+        8,
+        32
+      ],
+      "step": 8,
+      "values": [
+        16,
+        24
+      ]
+    },
+    "region_pruning": {
+      "description": "Remove fragmented findings using tract coverage (1=yes, 0=no)",
+      "type": "int",
+      "default": 1,
+      "options": [
+        0,
+        1
+      ],
+      "value": 1
+    },
+    "no_tractogram": {
+      "description": "Avoid generating 3D tractogram images (1=yes, 0=no)",
+      "type": "int",
+      "default": 1,
+      "options": [
+        0,
+        1
+      ],
+      "value": 1
+    }
+  },
+  "optional_parameters": {
+    "output": {
+      "description": "Prefix for output files (defaults to demographics file name + variable)",
+      "type": "string",
+      "required": false,
+      "value": ""
+    },
+    "select": {
+      "description": "Subject selection criteria (e.g., 'Gender=1,Age>20')",
+      "type": "string",
+      "required": false,
+      "example": "Gender=1,Age>20",
+      "value": ""
+    },
+    "seed": {
+      "description": "Seed region file path for tracking",
+      "type": "file_path",
+      "required": false,
+      "value": ""
+    },
+    "roi": {
+      "description": "Region of interest file path",
+      "type": "file_path",
+      "required": false,
+      "value": ""
+    },
+    "roa": {
+      "description": "Region of avoidance file path",
+      "type": "file_path",
+      "required": false,
+      "value": ""
+    }
+  },
+  "batch_configurations": [
+    {
+      "name": "analysis_qa_effect_size_sweep",
+      "description": "Test different effect sizes with QA metric",
+      "parameters": {
+        "index_name": "qa",
+        "effect_size": [
+          0.2,
+          0.3,
+          0.4
+        ],
+        "length_threshold": 20,
+        "permutation": 2000
+      }
+    },
+    {
+      "name": "analysis_dti_fa_threshold_sweep",
+      "description": "Test different thresholds with DTI FA metric",
+      "parameters": {
+        "index_name": "dti_fa",
+        "t_threshold": [
+          2.0,
+          2.5,
+          3.0
+        ],
+        "length_threshold": [
+          20,
+          30
+        ],
+        "permutation": 2000
+      }
+    },
+    {
+      "name": "analysis_with_fdr",
+      "description": "Analysis with FDR control enabled",
+      "parameters": {
+        "index_name": "qa",
+        "effect_size": 0.3,
+        "fdr_threshold": 0.05,
+        "permutation": 4000
+      }
+    },
+    {
+      "name": "multimodal_comparison",
+      "description": "Compare different diffusion metrics",
+      "parameters": {
+        "index_name": [
+          "qa",
+          "dti_fa",
+          "md",
+          "rdi"
+        ],
+        "effect_size": 0.3,
+        "length_threshold": 20,
+        "permutation": 2000
+      }
+    }
+  ]
+}

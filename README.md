@@ -4,7 +4,18 @@ Advanced Python tool for extracting connectivity matrices using DSI Studio with 
 
 ## 🚀 Quick Start
 
-### 1. **Validate Setup First (Recommended)**
+### 1. **Environment Setup (Recommended)**
+It is highly recommended to use a virtual environment to manage dependencies (`pandas`, `numpy`, `scipy`).
+
+```bash
+# Run the setup script
+./setup_env.sh
+
+# Activate the environment
+source venv/bin/activate
+```
+
+### 2. **Validate Setup**
 ```bash
 # Basic validation
 python validate_setup.py
@@ -13,7 +24,7 @@ python validate_setup.py
 python validate_setup.py --config example_config.json --test-input /path/to/data/
 ```
 
-### 2. **Pilot Test**
+### 3. **Pilot Test**
 ```bash
 # Test 1-2 files before full batch
 python extract_connectivity_matrices.py \
@@ -40,12 +51,19 @@ python validate_setup.py --help
 
 ## 📁 Files Overview
 
+### Connectivity Matrix Extraction
 - **`extract_connectivity_matrices.py`** - Main processing script with validation
 - **`validate_setup.py`** - Setup validation tool
 - **`example_config.json`** - Example configuration file
 - **`connectivity_config.json`** - Template configuration
 - **`BATCH_PROCESSING_GUIDE.md`** - Detailed batch processing guide
 - **`DSI_Studio_Parameters_Analysis.md`** - Parameter analysis guide
+
+### Connectometry Analysis (NEW)
+- **`run_connectometry_batch.py`** - Batch connectometry analysis script
+- **`connectometry_config.json`** - Full connectometry configuration with parameter ranges
+- **`connectometry_simple.json`** - Simple example configuration
+- **`CONNECTOMETRY_GUIDE.md`** - Complete connectometry analysis guide
 
 ## 🔧 Configuration vs Command-Line
 

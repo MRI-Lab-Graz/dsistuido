@@ -1,8 +1,6 @@
 {
   "comment": "Example configuration for connectivity matrix extraction",
-  
   "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
-  
   "atlases": [
     "ATAG_basal_ganglia",
     "Campbell",
@@ -11,7 +9,7 @@
     "FreeSurferSeg",
     "HCP842_tractography",
     "FreeSurferDKT_Cortical",
-    "FreeSurferDKT_Subcortical", 
+    "FreeSurferDKT_Subcortical",
     "Brainnectome",
     "HCPex",
     "HCP-MMP",
@@ -56,7 +54,7 @@
     "method": "Tracking algorithm: 0=Streamline(Euler), 1=RK4, 2=Voxel tracking",
     "otsu_threshold": "Default Otsu threshold (0.1-1.0)",
     "fa_threshold": "FA threshold for termination (0=automatic)",
-    "turning_angle": "Maximum turning angle in degrees (0=random 15-90°)",
+    "turning_angle": "Maximum turning angle in degrees (0=random 15-90\u00b0)",
     "step_size": "Step size in mm (0=random 1-3 voxels)",
     "smoothing": "Fraction of previous direction to mix in (0-1)",
     "min_length": "Minimum fiber length in mm (0=dataset specific)",

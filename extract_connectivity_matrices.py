@@ -23,6 +23,10 @@ import glob
 from typing import List, Optional, Dict, Any
 from typing import List, Dict, Optional
 
+# Force Qt to use minimal platform for headless execution
+# This avoids "Could not find the Qt platform plugin" errors on servers without display
+# os.environ['QT_QPA_PLATFORM'] = 'minimal'
+
 # Add scipy for .mat file reading and numpy for array handling
 try:
     import scipy.io
