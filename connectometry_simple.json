@@ -63,9 +63,9 @@
       "description": "Nested sweep of effect size (0.2-0.4) and length threshold (20-80)",
       "parameters": {
         "index_name": "qa",
-        "effect_size": "0.2:0.05:0.4",
-        "length_threshold": "20:10:60",
-        "permutation": 10000
+        "effect_size": "0.2:0.01:0.3",
+        "length_threshold": "25:5:60",
+        "permutation": 4000
       }
     }
   ]

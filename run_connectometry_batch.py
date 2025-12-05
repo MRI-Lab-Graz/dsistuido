@@ -22,6 +22,7 @@ import itertools
 import time
 import shutil
 import concurrent.futures
+import random
 
 # Force Qt to use minimal platform for headless execution
 # This avoids "Could not find the Qt platform plugin" errors on servers without display
@@ -321,6 +322,12 @@ class ConnectometryBatchAnalysis:
             self.logger.info(f"Command: {result['command']}")
             self.logger.info(f"{'='*80}\n")
             
+            # Add random delay if running in parallel to avoid xvfb race conditions
+            if self.workers > 1:
+                delay = random.uniform(2.0, 30.0)
+                self.logger.info(f"Waiting {delay:.2f}s before starting to avoid race conditions...")
+                time.sleep(delay)
+
             # Run analysis
             result['start_time'] = datetime.now().isoformat()
             start = time.time()
@@ -550,6 +557,67 @@ class ConnectometryBatchAnalysis:
         
         result = self.run_single_analysis(name, params)
         self.results.append(result)
+
+    def retry_failed_analyses(self, summary_file: str):
+        """
+        Retry failed analyses from a previous run summary
+        
+        Args:
+            summary_file: Path to the analysis summary JSON file
+        """
+        summary_path = Path(summary_file)
+        if not summary_path.exists():
+            self.logger.error(f"Summary file not found: {summary_path}")
+            return
+
+        with open(summary_path, 'r') as f:
+            summary = json.load(f)
+            
+        failed_analyses = [a for a in summary.get('analyses', []) if a.get('status') == 'failed']
+        
+        if not failed_analyses:
+            self.logger.info("No failed analyses found in summary.")
+            return
+            
+        self.logger.info(f"Found {len(failed_analyses)} failed analyses. Retrying...")
+        
+        # Use the same parallel execution logic if workers > 1
+        if self.workers > 1:
+            self.logger.info(f"Retrying with {self.workers} parallel workers")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
+                futures = []
+                for i, analysis in enumerate(failed_analyses):
+                    name = analysis.get('name')
+                    params = analysis.get('params')
+                    
+                    futures.append(
+                        executor.submit(
+                            self.run_single_analysis,
+                            name,
+                            params,
+                            i,
+                            len(failed_analyses)
+                        )
+                    )
+                
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        result = future.result()
+                        self.results.append(result)
+                    except Exception as e:
+                        self.logger.error(f"Retry execution error: {e}")
+        else:
+            for i, analysis in enumerate(failed_analyses):
+                name = analysis.get('name')
+                params = analysis.get('params')
+                
+                result = self.run_single_analysis(
+                    name,
+                    params,
+                    i,
+                    len(failed_analyses)
+                )
+                self.results.append(result)
     
     def save_summary(self):
         """Save summary of all analyses to JSON file"""
@@ -637,6 +705,13 @@ Examples:
         default=None,
         help='Run custom analysis with JSON parameters'
     )
+
+    parser.add_argument(
+        '--retry-failed',
+        type=str,
+        default=None,
+        help='Retry failed analyses from a summary JSON file'
+    )
     
     parser.add_argument(
         '--test',
@@ -665,6 +740,10 @@ Examples:
         if args.custom:
             custom_params = json.loads(args.custom)
             batch.run_custom_analysis(custom_params)
+
+        # Retry failed analyses
+        elif args.retry_failed:
+            batch.retry_failed_analyses(args.retry_failed)
             
         # Run test run
         elif args.test:
