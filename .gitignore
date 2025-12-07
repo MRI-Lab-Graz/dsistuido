@@ -5,6 +5,8 @@ __pycache__/
 *.so
 .Python
 build/
+*.pdf
+local/
 develop-eggs/
 connectometry_results/
 dist/
@@ -99,3 +101,4 @@ tmp/
 temp/
 *.tmp
 *.temp
+.local/qa_results_interactive.html
