@@ -347,33 +347,39 @@ class ConnectometryBatchAnalysis:
             result['stderr'] = process.stderr
             
             if process.returncode == 0:
-                result['status'] = 'success'
-                self.logger.info(f"✓ Analysis completed successfully in {result['duration']:.2f}s")
-                
-                # Parse results for significance
-                try:
-                    # Extract output prefix from command
-                    output_arg = next((arg for arg in cmd if arg.startswith('--output=')), None)
-                    if output_arg:
-                        output_prefix = output_arg.split('=', 1)[1]
-                        
-                        # Check for positive/increased findings
-                        inc_track = Path(f"{output_prefix}.inc.tt.gz")
-                        if inc_track.exists() and inc_track.stat().st_size > 1000: # Check if file is not empty/trivial
-                            result['findings_increased'] = True
-                            self.logger.info("  -> Found INCREASED connectivity findings")
-                        else:
-                            result['findings_increased'] = False
+                # Check for DSI Studio specific error messages in stdout even if return code is 0
+                if "❌" in result['stdout'] or "cannot find" in result['stdout'].lower() or "error" in result['stdout'].lower():
+                     result['status'] = 'failed'
+                     self.logger.error(f"✗ Analysis failed (detected error in output)")
+                     self.logger.error(f"Output snippet: {result['stdout'][-500:]}") # Log last 500 chars
+                else:
+                    result['status'] = 'success'
+                    self.logger.info(f"✓ Analysis completed successfully in {result['duration']:.2f}s")
+                    
+                    # Parse results for significance
+                    try:
+                        # Extract output prefix from command
+                        output_arg = next((arg for arg in cmd if arg.startswith('--output=')), None)
+                        if output_arg:
+                            output_prefix = output_arg.split('=', 1)[1]
                             
-                        # Check for negative/decreased findings
-                        dec_track = Path(f"{output_prefix}.dec.tt.gz")
-                        if dec_track.exists() and dec_track.stat().st_size > 1000:
-                            result['findings_decreased'] = True
-                            self.logger.info("  -> Found DECREASED connectivity findings")
-                        else:
-                            result['findings_decreased'] = False
-                except Exception as e:
-                    self.logger.warning(f"Failed to parse results: {e}")
+                            # Check for positive/increased findings
+                            inc_track = Path(f"{output_prefix}.inc.tt.gz")
+                            if inc_track.exists() and inc_track.stat().st_size > 1000: # Check if file is not empty/trivial
+                                result['findings_increased'] = True
+                                self.logger.info("  -> Found INCREASED connectivity findings")
+                            else:
+                                result['findings_increased'] = False
+                                
+                            # Check for negative/decreased findings
+                            dec_track = Path(f"{output_prefix}.dec.tt.gz")
+                            if dec_track.exists() and dec_track.stat().st_size > 1000:
+                                result['findings_decreased'] = True
+                                self.logger.info("  -> Found DECREASED connectivity findings")
+                            else:
+                                result['findings_decreased'] = False
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse results: {e}")
                     
             else:
                 result['status'] = 'failed'
