@@ -8,7 +8,7 @@
     },
     "index_name": {
       "description": "Metric to analyze",
-      "value": "qa"
+      "value": "fa"
     },
     "demo": {
       "description": "Path to your demographics CSV file",
@@ -53,7 +53,7 @@
       "name": "test_run",
       "description": "Simple test with one parameter set",
       "parameters": {
-        "index_name": "qa",
+        "index_name": "fa",
         "effect_size": 0.3,
         "permutation": 2000
       }
@@ -62,7 +62,7 @@
       "name": "full_parameter_sweep",
       "description": "Nested sweep of effect size (0.2-0.4) and length threshold (20-80)",
       "parameters": {
-        "index_name": "qa",
+        "index_name": "fa",
         "effect_size": "0.2:0.01:0.3",
         "length_threshold": "25:5:60",
         "permutation": 4000

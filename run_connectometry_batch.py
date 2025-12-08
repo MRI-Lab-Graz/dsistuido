@@ -731,7 +731,7 @@ Examples:
     parser.add_argument(
         '--nohup',
         action='store_true',
-        help='Show instructions for running detached in background with nohup'
+        help='Run detached in background automatically'
     )
 
     args = parser.parse_args()
@@ -793,9 +793,42 @@ if __name__ == '__main__':
         print("\nUsage: python run_connectometry_batch.py --config CONFIG [options]\n")
         print("For full help, run: python run_connectometry_batch.py --help\n")
         sys.exit(0)
+        
     if '--nohup' in sys.argv:
-        print("\nTo run detached, use:\n")
-        print("nohup python run_connectometry_batch.py [your options] > batch.log 2>&1 &\n")
-        print("Check progress with: tail -f batch.log\n")
-        sys.exit(0)
+        # Remove --nohup from arguments
+        cmd_args = [arg for arg in sys.argv if arg != '--nohup']
+        
+        # Log file
+        log_filename = "batch_detached.log"
+        
+        print(f"\nLaunching detached process...")
+        print(f"Output logging to: {log_filename}")
+        
+        try:
+            # Open file for appending
+            with open(log_filename, 'a') as log_file:
+                # Write a header to the log
+                log_file.write(f"\n{'='*40}\n")
+                log_file.write(f"Detached run started at {datetime.now().isoformat()}\n")
+                log_file.write(f"Command: {' '.join([sys.executable] + cmd_args)}\n")
+                log_file.write(f"{'='*40}\n")
+                log_file.flush()
+                
+                # Launch process
+                # start_new_session=True is equivalent to setsid, detaching from terminal
+                subprocess.Popen(
+                    [sys.executable] + cmd_args,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True
+                )
+                
+            print(f"Process launched successfully.")
+            print(f"You can now close this terminal.")
+            print(f"Monitor progress with: tail -f {log_filename}\n")
+            sys.exit(0)
+        except Exception as e:
+            print(f"Failed to launch detached process: {e}")
+            sys.exit(1)
+
     sys.exit(main())
