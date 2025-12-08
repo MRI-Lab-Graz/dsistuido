@@ -4,7 +4,7 @@
   "core_parameters": {
     "source": {
       "description": "Path to your connectometry database file",
-      "value": "/data/local/dsi_crea/dsi_crea/Daten/session1.qa.db.fz"
+      "value": "/data/local/dsi_crea/dsi_crea/Daten/sub-129.dti_fa.db.fz"
     },
     "index_name": {
       "description": "Metric to analyze",

@@ -303,3 +303,21 @@ This tool is designed to be robust and user-friendly. For issues or improvements
 ---
 
 **Happy brain connectivity analysis!** 🧠✨
+
+## Running in Background (Detached)
+
+To run the batch script and detach from the terminal, use:
+
+```bash
+nohup python run_connectometry_batch.py --config connectometry_simple.json --workers 4 > batch.log 2>&1 &
+```
+
+This will:
+- Run the process in the background
+- Log all output to `batch.log`
+- Allow you to log off safely
+
+You can check progress with:
+```bash
+tail -f batch.log
+```

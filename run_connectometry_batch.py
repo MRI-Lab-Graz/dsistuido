@@ -668,6 +668,9 @@ Examples:
   
   # Run custom analysis with parameters
   python run_connectometry_batch.py --config connectometry_config.json --custom '{"index_name":"qa","effect_size":0.3}'
+  
+    # Run detached in background (nohup)
+    python run_connectometry_batch.py --nohup [your options]
         """
     )
     
@@ -725,6 +728,12 @@ Examples:
         help='Show commands without executing them'
     )
     
+    parser.add_argument(
+        '--nohup',
+        action='store_true',
+        help='Show instructions for running detached in background with nohup'
+    )
+
     args = parser.parse_args()
     
     try:
@@ -780,4 +789,13 @@ Examples:
 
 
 if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        print("\nUsage: python run_connectometry_batch.py --config CONFIG [options]\n")
+        print("For full help, run: python run_connectometry_batch.py --help\n")
+        sys.exit(0)
+    if '--nohup' in sys.argv:
+        print("\nTo run detached, use:\n")
+        print("nohup python run_connectometry_batch.py [your options] > batch.log 2>&1 &\n")
+        print("Check progress with: tail -f batch.log\n")
+        sys.exit(0)
     sys.exit(main())
