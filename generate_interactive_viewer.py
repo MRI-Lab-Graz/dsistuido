@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from PIL import Image
 
 ROOT_DEFAULT = "/Volumes/Thunder/dsi_crea/final_sweep"
-OUTPUT_HTML = "interactive_viewer.html"
+OUTPUT_HTML_NAME = "interactive_viewer.html"
 
 
 def parse_params(path: Path) -> Optional[Tuple[str, float, int, int]]:
@@ -177,19 +177,20 @@ render();
 
 
 def main(root_dir: str = ROOT_DEFAULT):
-    root = Path(root_dir)
-    if not root.exists():
-        raise SystemExit(f"Root directory not found: {root}")
-    data = collect_images(root)
-    html = build_html(data, str(root))
-    Path(OUTPUT_HTML).write_text(html, encoding="utf-8")
-    print(f"Wrote {OUTPUT_HTML} with {len(data)} entries.")
+  root = Path(root_dir)
+  if not root.exists():
+    raise SystemExit(f"Root directory not found: {root}")
+  data = collect_images(root)
+  html = build_html(data, str(root))
+  output_path = root / OUTPUT_HTML_NAME
+  output_path.write_text(html, encoding="utf-8")
+  print(f"Wrote {output_path} with {len(data)} entries.")
 
 
 if __name__ == "__main__":
-    import argparse
+  import argparse
 
-    parser = argparse.ArgumentParser(description="Generate an interactive viewer with sliders for effect size and threshold.")
-    parser.add_argument("--root", default=ROOT_DEFAULT, help="Root directory containing the output images")
-    args = parser.parse_args()
-    main(args.root)
+  parser = argparse.ArgumentParser(description="Generate an interactive viewer with sliders for effect size and threshold.")
+  parser.add_argument("input_folder", nargs="?", default=ROOT_DEFAULT, help="Root directory containing the output images")
+  args = parser.parse_args()
+  main(args.input_folder)
