@@ -42,7 +42,15 @@ class ConnectometryBatchAnalysis:
         """
         self.config_file = Path(config_file)
         self.config = self._load_config()
-        self.output_dir = Path(output_dir) if output_dir else Path.cwd() / "connectometry_results"
+
+        # Always use an absolute output directory so that DSI Studio
+        # can reliably write result files and figures even if it
+        # changes its current working directory internally.
+        if output_dir:
+            self.output_dir = Path(output_dir).expanduser().resolve()
+        else:
+            self.output_dir = (Path.cwd() / "connectometry_results").resolve()
+
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.workers = workers
         
@@ -347,11 +355,53 @@ class ConnectometryBatchAnalysis:
             result['stderr'] = process.stderr
             
             if process.returncode == 0:
-                # Check for DSI Studio specific error messages in stdout even if return code is 0
-                if "❌" in result['stdout'] or "cannot find" in result['stdout'].lower() or "error" in result['stdout'].lower():
-                     result['status'] = 'failed'
-                     self.logger.error(f"✗ Analysis failed (detected error in output)")
-                     self.logger.error(f"Output snippet: {result['stdout'][-500:]}") # Log last 500 chars
+                # Check for DSI Studio specific error messages in stdout even if return code is 0.
+                # Some "❌ cannot save ...jpg" messages are non-fatal (figure export only) and
+                # should not cause the whole analysis to be marked as failed.
+
+                stdout_text = result['stdout'] or ""
+                stdout_lower = stdout_text.lower()
+
+                # Lines that contain the red-cross marker
+                cross_lines = [ln for ln in stdout_text.splitlines() if "❌" in ln]
+
+                def _is_non_fatal_figure_error(line: str) -> bool:
+                    """Return True for known non-fatal DSI Studio JPG export issues."""
+                    l = line.lower()
+                    # Known non-critical messages we want to tolerate:
+                    # - cannot save mapping to ...dec_map2.jpg
+                    # - cannot save screen to ...pos_neg.jpg
+                    return (
+                        ("cannot save mapping" in l and "dec_map2.jpg" in l)
+                        or ("cannot save screen" in l and "pos_neg.jpg" in l)
+                    )
+
+                has_non_fatal_cross_only = bool(cross_lines) and all(
+                    _is_non_fatal_figure_error(ln) for ln in cross_lines
+                )
+
+                # Detect real problems
+                cannot_find_lines = [ln for ln in stdout_text.splitlines() if "cannot find" in ln.lower()]
+                # "cannot find index: t1w_template" is known to be non-fatal for
+                # our use case (core outputs and JPGs are still created), so we
+                # tolerate it as a warning.
+                def _is_non_fatal_cannot_find(line: str) -> bool:
+                    return "cannot find index" in line.lower() and "t1w_template" in line.lower()
+
+                has_cannot_find_fatal = bool(cannot_find_lines) and not all(
+                    _is_non_fatal_cannot_find(ln) for ln in cannot_find_lines
+                )
+                has_cross = bool(cross_lines)
+
+                fatal_output_issue = (
+                    has_cannot_find_fatal
+                    or (has_cross and not has_non_fatal_cross_only)
+                )
+
+                if fatal_output_issue:
+                    result['status'] = 'failed'
+                    self.logger.error(f"✗ Analysis failed (detected error in output)")
+                    self.logger.error(f"Output snippet: {stdout_text[-500:]}")  # Log last 500 chars
                 else:
                     result['status'] = 'success'
                     self.logger.info(f"✓ Analysis completed successfully in {result['duration']:.2f}s")
