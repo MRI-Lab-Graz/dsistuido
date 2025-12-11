@@ -105,3 +105,5 @@ temp/
 *.temp
 .local/qa_results_interactive.html
 .local/connectometry_simple.json
+interactive_viewer.html
+crea_qa_fa.html
