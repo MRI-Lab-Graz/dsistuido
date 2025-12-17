@@ -9,6 +9,22 @@ ROOT_DEFAULT = "/Volumes/Thunder/dsi_crea/final_sweep"
 OUTPUT_HTML_NAME = "interactive_viewer.html"
 
 
+def get_default_root_dir() -> str:
+  """Pick a sensible default root directory.
+
+  If this repo has a local ./connectometry_results folder, prefer that so
+  running the script with no args "just works".
+  """
+  candidates = [
+    Path.cwd() / "connectometry_results",
+    Path(__file__).resolve().parent / "connectometry_results",
+  ]
+  for candidate in candidates:
+    if candidate.exists():
+      return str(candidate)
+  return ROOT_DEFAULT
+
+
 def encode_image_to_data_uri(img: Image.Image, max_width: Optional[int], jpeg_quality: int) -> str:
   """Resize (if requested) and JPEG-encode an image to a data URI."""
   if max_width and max_width > 0 and img.width > max_width:
@@ -44,7 +60,7 @@ def parse_params(path: Path) -> Optional[Tuple[str, float, int, int]]:
       except ValueError:
         # not a matching pattern, continue searching up
         continue
-    return None
+  return None
 
 
 def get_image_data_uri(img_path: Path, max_width: Optional[int], jpeg_quality: int) -> str:
@@ -167,6 +183,16 @@ def build_html(data: List[Dict], root_dir: str, placeholder_data_uri: Optional[s
 <title>Connectometry Interactive Viewer</title>
 <style>
 body { font-family: Arial, sans-serif; margin: 16px; }
+.header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.affiliations { text-align: right; font-size: 14px; color: #333; line-height: 1.35; }
+.legend { margin: 8px 0 14px; font-size: 14px; color: #333; line-height: 1.35; }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; border: 1px solid #666; vertical-align: -2px; margin-right: 6px; }
+.swatch.red { background: red; }
+.swatch.green { background: green; }
+.swatch.blue { background: blue; }
+.swatch.yellow { background: yellow; }
+.swatch.cyan { background: cyan; }
+.swatch.magenta { background: magenta; }
 .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
 label { font-weight: bold; }
 #images { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
@@ -177,7 +203,28 @@ label { font-weight: bold; }
 </style>
 </head>
 <body>
-<h2>Connectometry Interactive Viewer</h2>
+<div class=\"header\">
+  <h2 style=\"margin: 0;\">Connectometry Interactive Viewer</h2>
+  <div class=\"affiliations\">
+    MRI-Lab Graz<br />
+    Karl Koschutnig<br />
+    <a href=\"mailto:karl.koschutnig@uni-graz\">karl.koschutnig@uni-graz</a>
+  </div>
+</div>
+<div class=\"legend\">
+  <strong>Color legend (DTI/DWI direction):</strong><br />
+  <span class=\"swatch red\"></span>Red: Left–Right (transverse)
+  &nbsp;&nbsp;
+  <span class=\"swatch green\"></span>Green: Anterior–Posterior (front–back)
+  &nbsp;&nbsp;
+  <span class=\"swatch blue\"></span>Blue: Superior–Inferior (up–down)
+  <br />
+  <span class=\"swatch yellow\"></span>Yellow (red+green): anterolateral
+  &nbsp;&nbsp;
+  <span class=\"swatch cyan\"></span>Cyan (green+blue): superolateral
+  &nbsp;&nbsp;
+  <span class=\"swatch magenta\"></span>Magenta (red+blue): oblique
+</div>
 <div class="controls">
   <label for=\"modality\">Modality</label>
   <select id=\"modality\"></select>
@@ -264,7 +311,6 @@ function render() {
       <span class=\"badge\">Effect ${d.effect}</span>
       <span class=\"badge\">Thresh ${d.threshold}</span>
       <span class=\"badge\">Mod ${d.modality || 'n/a'}</span>
-      <div style=\"font-size:12px; margin-top:4px;\">${d.filename}</div>
     `;
     card.appendChild(img);
     card.appendChild(meta);
@@ -333,7 +379,10 @@ if __name__ == "__main__":
   parser = argparse.ArgumentParser(
       description="Generate an interactive viewer with sliders for effect size and threshold."
   )
-  parser.add_argument("input_folder", nargs="?", default=ROOT_DEFAULT, help="Root directory containing the output images")
+  parser.add_argument(
+      "input_folder",
+      help="Root directory containing the output images",
+  )
   parser.add_argument("--output", "-o", dest="output", default=None, help="Output folder to write the HTML (default: input folder)")
   parser.add_argument("--output-name", dest="output_name", default=None, help=f"Output HTML filename (default: {OUTPUT_HTML_NAME})")
   parser.add_argument("--jpeg-quality", dest="jpeg_quality", type=int, default=75, help="JPEG quality for embedded images (1-100). Lower reduces file size; default 75.")
@@ -344,6 +393,7 @@ if __name__ == "__main__":
   parser.add_argument("--placeholder", dest="placeholder", default=None, help="Path to an image used for entries missing/too-small tt.gz (default: generated blank)")
   parser.add_argument("--placeholder-quality", dest="placeholder_quality", type=int, default=None, help="JPEG quality for placeholder encoding (default: same as --jpeg-quality)")
   parser.add_argument("--no-placeholder", dest="enable_placeholder", action="store_false", help="Do not show a placeholder for missing/too-small tt.gz; drop non-significant entries entirely")
+
   # If no arguments were passed, show help and exit
   if len(sys.argv) == 1:
     parser.print_help()
