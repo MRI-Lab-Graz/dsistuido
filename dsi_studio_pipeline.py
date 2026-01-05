@@ -168,15 +168,16 @@ class DSIStudioPipeline:
             self.logger.error(f"Failed to decompress {zipped_path}: {exc}")
             return None
 
-    def _collect_generated_fib_candidates(self, src_file: Path) -> List[Path]:
-        """Gather reconstructed FIB files, decompressing .sz archives when necessary."""
-        candidates = []
-        seen = set()
+    def _collect_reconstruction_outputs(self, src_file: Path) -> List[Path]:
+        """Gather reconstructed delta outputs (.fib or .odf) and decompress .sz archives."""
+        outputs = []
+        prefix = src_file.name.split(".src")[0]
         parent = src_file.parent
-        patterns = [f"{src_file.name}*.fib.gz", f"{src_file.name}*.fib.gz.sz"]
+        patterns = [f"{prefix}*.fib.gz", f"{prefix}*.odf.*"]
+
         for pattern in patterns:
             for match in parent.glob(pattern):
-                target = match
+                candidate = match
                 if match.suffix == ".sz":
                     if self.dry_run:
                         self.logger.info(f"Dry run: would decompress {match}")
@@ -184,11 +185,10 @@ class DSIStudioPipeline:
                     decompressed = self._decompress_sz(match)
                     if not decompressed:
                         continue
-                    target = decompressed
-                if target not in seen:
-                    seen.add(target)
-                    candidates.append(target)
-        return candidates
+                    candidate = decompressed
+                if candidate not in outputs:
+                    outputs.append(candidate)
+        return outputs
 
     def run_command(self, cmd: List[str]):
         """Run a shell command and log output"""
@@ -360,10 +360,10 @@ class DSIStudioPipeline:
 
     def reconstruct_fib(self, src_file: Path):
         """Reconstruct FIB file from SRC"""
-        subject_id = src_file.name.replace('.src.gz', '')
-        
+        subject_prefix = src_file.name.split('.src')[0]
+
         # If a fib already exists and skipping is enabled, reuse it
-        existing_fib = list(self.fib_dir.glob(f"{src_file.name}*.fib.gz"))
+        existing_fib = [p for p in self.fib_dir.glob(f"{subject_prefix}*")]
         if existing_fib and self.skip_existing:
             self.logger.info(f"FIB exists, skipping reconstruction: {existing_fib[0].name}")
             self.stats["skipped_existing"] += 1
@@ -375,15 +375,12 @@ class DSIStudioPipeline:
             f"--source={src_file}",
             f"--method={self.method}",
             f"--param0={self.param0}",
-            f"--thread={self.threads}",
-            "--check_btable=1",
+            f"--thread_count={self.threads}",
             "--other_output=all"
         ]
         
         if self.run_command(cmd):
-            # DSI Studio may output .fib.gz.sz - collect both .fib.gz and .fib.gz.sz
-            generated_fib = list(src_file.parent.glob(f"{src_file.name}*.fib.gz"))
-            generated_fib += list(src_file.parent.glob(f"{src_file.name}*.fib.gz.sz"))
+            generated_fib = self._collect_reconstruction_outputs(src_file)
             if generated_fib:
                 moved = []
                 for fib in generated_fib:
@@ -411,7 +408,7 @@ class DSIStudioPipeline:
         
         cmd = [
             self.dsi_studio_cmd,
-            "--action=ana",
+            "--action=db",
             f"--source={fib_list}",
             f"--output={output_db}"
         ]
@@ -420,7 +417,7 @@ class DSIStudioPipeline:
         self.logger.info(f"Database created at {output_db}")
 
     def _generate_html_report(self, subject_id: str, sessions: List[Dict]):
-        """Generate HTML report for a subject with all sessions"""
+        """Generate HTML report for a subject containing all sessions."""
         html_content = f"""<!DOCTYPE html>
 <html>
 <head>
