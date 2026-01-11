@@ -95,10 +95,12 @@ class DSIStudioPipeline:
         
         self.src_dir = self.output_dir / "src"
         self.fib_dir = self.output_dir / "fib"
+        self.diff_dir = self.output_dir / "diff"
         self.reports_dir = self.output_dir / "reports"
         
         self.src_dir.mkdir(parents=True, exist_ok=True)
         self.fib_dir.mkdir(parents=True, exist_ok=True)
+        self.diff_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         
         self.logger = setup_logging(self.output_dir)
@@ -210,6 +212,8 @@ class DSIStudioPipeline:
         parts = path.name.split("_")
         sub = next((p for p in parts if p.startswith("sub-")), "")
         ses = next((p for p in parts if p.startswith("ses-")), "")
+        if ses:
+            ses = ses.split(".")[0] # Clean 'ses-1.odf.qsdr.fz' to 'ses-1'
         return sub, ses
 
     def verify_raw_vs_qsiprep(self):
@@ -286,9 +290,16 @@ class DSIStudioPipeline:
 
         self.stats["found"] = len(valid_dwi)
         if self.pilot:
-            selected = random.choice(valid_dwi)
-            self.logger.info(f"PILOT MODE: Randomly selected subject {selected.name}")
-            return [selected]
+            subjects = set()
+            for dwi in valid_dwi:
+                sub_id = dwi.name.split('_')[0]
+                subjects.add(sub_id)
+            
+            if subjects:
+                selected_sub = random.choice(list(subjects))
+                selected_files = [f for f in valid_dwi if f.name.startswith(selected_sub + "_")]
+                self.logger.info(f"PILOT MODE: Randomly selected subject {selected_sub} ({len(selected_files)} files)")
+                return selected_files
             
         self.logger.info(f"Found {len(valid_dwi)} valid DWI files")
         return valid_dwi
@@ -394,16 +405,46 @@ class DSIStudioPipeline:
                 return moved[0] if moved else None
         return None
 
-    def create_database(self, fib_files: List[Path]):
+    def generate_longitudinal_diff(self, baseline_fib: Path, followup_fib: Path) -> Optional[Path]:
+        """Compute longitudinal change between two sessions using a custom script that merges diff into baseline template."""
+        sub_b, ses_b = self._parse_sub_ses(baseline_fib)
+        sub_f, ses_f = self._parse_sub_ses(followup_fib)
+        
+        if not ses_b or not ses_f:
+            self.logger.warning(f"Could not determine sessions for {baseline_fib.name} or {followup_fib.name}")
+            return None
+
+        output_name = f"{sub_f}_{ses_f}_minus_{ses_b}.fib.gz"
+        output_path = self.diff_dir / output_name
+        
+        if output_path.exists() and self.skip_existing:
+            self.logger.info(f"Diff already exists, skipping: {output_name}")
+            return output_path
+
+        # Use the specialized create_differential_fib.py script
+        script_path = Path(__file__).parent / "create_differential_fib.py"
+        cmd = [
+            "python3",
+            str(script_path),
+            "--baseline", str(baseline_fib),
+            "--followup", str(followup_fib),
+            "--output", str(output_path)
+        ]
+        
+        self.logger.info(f"Computing longitudinal change (v2): {ses_f} - {ses_b} for {sub_f}")
+        if self.run_command(cmd):
+            return output_path
+        return None
+
+    def create_database(self, fib_files: List[Path], output_db: Optional[Path] = None, index_name: Optional[str] = None):
         """Create connectometry database from FIB files"""
         if not fib_files:
             self.logger.error("No FIB files found to create database")
             return
         
-        output_db = self.output_dir / self.db_name
+        if output_db is None:
+            output_db = self.output_dir / self.db_name
         
-        # DSI Studio can take a list of files or a directory
-        # Using a comma-separated list or a wildcard
         fib_list = ",".join([str(f) for f in fib_files])
         
         cmd = [
@@ -412,6 +453,9 @@ class DSIStudioPipeline:
             f"--source={fib_list}",
             f"--output={output_db}"
         ]
+
+        if index_name:
+            cmd.append(f"--index_name={index_name}")
         
         self.run_command(cmd)
         self.logger.info(f"Database created at {output_db}")
@@ -541,6 +585,46 @@ class DSIStudioPipeline:
         
         self.stats["processed"] = len(fib_files)
         
+        # --- Longitudinal Processing ---
+        # Group FIBs by subject
+        subject_fibs = {}
+        for fib in fib_files:
+            sub_id, ses_id = self._parse_sub_ses(fib)
+            if not sub_id: continue
+            if sub_id not in subject_fibs:
+                subject_fibs[sub_id] = {}
+            subject_fibs[sub_id][ses_id] = fib
+
+        # Compute differences
+        diff_groups = {} # key: "ses-2_minus_ses-1", value: [diff_fib1, diff_fib2...]
+        
+        self.logger.info("Checking for longitudinal data...")
+        for sub_id, sessions in subject_fibs.items():
+            if len(sessions) < 2:
+                continue
+            
+            # Sort sessions to identify baseline (earliest)
+            sorted_sessions = sorted(sessions.keys())
+            baseline_ses = sorted_sessions[0]
+            baseline_fib = sessions[baseline_ses]
+            
+            self.logger.info(f"Subject {sub_id} has {len(sessions)} sessions. Baseline: {baseline_ses}")
+            
+            for followup_ses in sorted_sessions[1:]:
+                diff_fib = self.generate_longitudinal_diff(baseline_fib, sessions[followup_ses])
+                if diff_fib:
+                    group_key = f"{followup_ses}_minus_{baseline_ses}"
+                    if group_key not in diff_groups:
+                        diff_groups[group_key] = []
+                    diff_groups[group_key].append(diff_fib)
+
+        # Create longitudinal databases
+        for group_key, group_fibs in diff_groups.items():
+            db_path = self.output_dir / f"longitudinal_{group_key}.db.fib.gz"
+            self.logger.info(f"Creating longitudinal database for {group_key} ({len(group_fibs)} subjects)")
+            self.create_database(group_fibs, output_db=db_path, index_name="qa")
+
+        # --- Final Database Check ---
         # Check if all subjects from participants.tsv are processed
         if not self.pilot:
             expected_subjects = self._load_participants_tsv()

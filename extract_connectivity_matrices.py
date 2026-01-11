@@ -311,6 +311,15 @@ class ConnectivityExtractor:
             validation_result['info'].append(msg)
             self.logger.info(msg)
         
+        # 1.1 Check FSL (optional but recommended for some preprocessing)
+        fsl_dir = os.environ.get('FSLDIR')
+        if not fsl_dir:
+            self.logger.warning("⚠️  FSLDIR is not set. Some DSI Studio preprocessing steps (like 'topup') may fail.")
+            validation_result['warnings'].append("FSLDIR is not set. FSL is required for certain preprocessing steps.")
+        else:
+            self.logger.info(f"✅ FSL found at: {fsl_dir}")
+            validation_result['info'].append(f"FSL found at: {fsl_dir}")
+        
         # 2. Validate atlases
         atlases = self.config.get('atlases', [])
         if not atlases:

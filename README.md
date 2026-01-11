@@ -136,6 +136,28 @@ python extract_connectivity_matrices.py --config my_config.json \
     --method 1 --fa_threshold 0.15 --turning_angle 35 subject.fz output/
 ```
 
+## 🔧 Troubleshooting
+
+### **FSLDIR Error (Common on macOS)**
+If you see an error like `Cannot locate FSL: FSLDIR is not set`, it means DSI Studio cannot find your FSL installation (needed for preprocessing steps like `topup`).
+
+**Solution (macOS):**
+1. Check if FSL is installed at `/usr/local/fsl`
+2. Add these lines to your `~/.zshrc` (or `~/.bash_profile` if using bash):
+   ```bash
+   export FSLDIR=/usr/local/fsl
+   . ${FSLDIR}/etc/fslconf/fsl.sh
+   export PATH=${FSLDIR}/bin:${PATH}
+   ```
+3. Restart your terminal and launch DSI Studio from the terminal:
+   ```bash
+   open /Applications/dsi_studio.app
+   ```
+
+### **DSI Studio Path**
+Ensure `dsi_studio_cmd` in your config points to the actual executable. On macOS, this is often inside the `.app` bundle:
+`/Applications/dsi_studio.app/Contents/MacOS/dsi_studio`
+
 ## 🧠 Supported Atlases
 
 - **AAL Family**: AAL, AAL2, AAL3
