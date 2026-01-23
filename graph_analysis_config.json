@@ -1,0 +1,11 @@
+{
+  "track_count": 1000000,
+  "tracking_parameters": {
+    "min_length": 30,
+    "max_length": 300
+  },
+  "connectivity_options": {
+    "connectivity_type": "end",
+    "connectivity_threshold": 0.001
+  }
+}
