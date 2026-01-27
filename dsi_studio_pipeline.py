@@ -85,6 +85,10 @@ class DSIStudioPipeline:
         self.skip_existing = args.skip_existing
         self.min_file_age = args.min_file_age  # Minimum age in seconds
         self.dry_run = args.dry_run
+        self.run_connectivity = args.run_connectivity
+        self.connectivity_config = Path(args.connectivity_config).resolve() if args.connectivity_config else None
+        self.connectivity_output_dir = Path(args.connectivity_output_dir).resolve() if args.connectivity_output_dir else self.output_dir / "connectivity"
+        self.connectivity_threads = args.connectivity_threads
 
         # Optional rawdata path for cross-checking
         if args.rawdata_dir:
@@ -102,6 +106,7 @@ class DSIStudioPipeline:
         self.fib_dir.mkdir(parents=True, exist_ok=True)
         self.diff_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
+        self.connectivity_output_dir.mkdir(parents=True, exist_ok=True)
         
         self.logger = setup_logging(self.output_dir)
         self.logger.info(f"Starting DSI Studio Pipeline")
@@ -436,6 +441,31 @@ class DSIStudioPipeline:
             return output_path
         return None
 
+    def run_connectivity_extraction(self, fib_files: List[Path]):
+        """Run connectivity matrix extraction on generated FIB files."""
+        if not fib_files:
+            self.logger.warning("No FIB files available for connectivity extraction")
+            return
+        extractor = Path(__file__).parent / "extract_connectivity_matrices.py"
+        if not extractor.exists():
+            self.logger.error(f"Connectivity extractor not found at {extractor}")
+            return
+        if self.connectivity_config and not self.connectivity_config.exists():
+            self.logger.error(f"Connectivity config not found: {self.connectivity_config}")
+            return
+
+        for fib in fib_files:
+            cmd = ["python3", str(extractor)]
+            if self.connectivity_config:
+                cmd += ["--config", str(self.connectivity_config)]
+            if self.connectivity_threads:
+                cmd += ["--threads", str(self.connectivity_threads)]
+            # Pass DSI Studio path to extractor
+            cmd += ["--dsi_studio_cmd", self.dsi_studio_cmd]
+            cmd += [str(fib), str(self.connectivity_output_dir)]
+            self.logger.info(f"Launching connectivity extraction for {fib.name}")
+            self.run_command(cmd)
+
     def create_database(self, fib_files: List[Path], output_db: Optional[Path] = None, index_name: Optional[str] = None):
         """Create connectometry database from FIB files"""
         if not fib_files:
@@ -584,6 +614,10 @@ class DSIStudioPipeline:
             self._generate_html_report(subject_id, sessions)
         
         self.stats["processed"] = len(fib_files)
+
+        if self.run_connectivity:
+            self.logger.info("Starting connectivity extraction step")
+            self.run_connectivity_extraction(fib_files)
         
         # --- Longitudinal Processing ---
         # Group FIBs by subject
@@ -667,6 +701,10 @@ if __name__ == "__main__":
     parser.add_argument("--min_file_age", type=int, default=300, help="Minimum file age in seconds (default: 300s/5min) to avoid processing files still being written")
     parser.add_argument("--pilot", action="store_true", help="Process only one randomly chosen subject")
     parser.add_argument("--dry_run", action="store_true", help="Show commands without running them")
+    parser.add_argument("--run_connectivity", action="store_true", help="Run connectivity extraction after FIB generation")
+    parser.add_argument("--connectivity_config", help="Path to connectivity extractor JSON config (e.g., graph_analysis_config.json)")
+    parser.add_argument("--connectivity_output_dir", help="Directory for connectivity outputs (default: output_dir/connectivity)")
+    parser.add_argument("--connectivity_threads", type=int, help="Thread override for connectivity extraction")
     
     args = parser.parse_args()
     

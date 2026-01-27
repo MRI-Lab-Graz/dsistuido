@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DSI Studio Web Console</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f5f6fa; color: #1f2d3d; }
+    header { background: #1f2d3d; color: #fff; padding: 16px 24px; }
+    h1 { margin: 0; font-size: 20px; }
+    main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+    .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); padding: 16px; border: 1px solid #e0e6ed; }
+    .card h2 { margin-top: 0; font-size: 18px; }
+    label { display: block; font-weight: 600; margin: 8px 0 4px; }
+    input, select, textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #cfd8dc; border-radius: 4px; }
+    textarea { min-height: 60px; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+    .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    button { background: #1f8ef1; color: #fff; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: 600; }
+    button.secondary { background: #546e7a; }
+    button:hover { opacity: 0.92; }
+    .checkbox-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+    .status { background: #fff; padding: 12px; border-radius: 8px; border: 1px solid #e0e6ed; margin-top: 16px; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 6px; overflow: auto; font-size: 12px; }
+    .pill { display: inline-block; padding: 2px 6px; border-radius: 999px; font-size: 12px; margin-right: 6px; }
+    .pill.running { background: #ffe082; color: #6d4c41; }
+    .pill.completed { background: #c8e6c9; color: #2e7d32; }
+    .pill.failed { background: #ffcdd2; color: #c62828; }
+    .small { font-size: 12px; color: #607d8b; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>DSI Studio Web Console</h1>
+  </header>
+  <main>
+    <p>Run the pipeline, connectometry batch, or interactive viewer from a browser. Save presets to JSON for later reuse.</p>
+    <div class="grid">
+      <div class="card" id="pipeline-card">
+        <h2>Pipeline</h2>
+        <label>QSIPrep dir</label><input id="p-qsiprep" placeholder="/path/to/qsiprep" />
+        <label>Output dir</label><input id="p-output" placeholder="/path/to/output" />
+        <div class="row">
+          <div><label>DSI Studio path</label><input id="p-dsi-path" placeholder="/path/to/dsi-studio" /></div>
+          <div><label>DSI Studio cmd</label><input id="p-dsi-cmd" placeholder="/data/local/software/dsi-studio/dsi_studio" /></div>
+        </div>
+        <div class="row">
+          <div><label>Method</label><input id="p-method" value="7" /></div>
+          <div><label>param0</label><input id="p-param0" value="1.25" /></div>
+          <div><label>Threads</label><input id="p-threads" value="8" /></div>
+        </div>
+        <label>Rawdata dir (optional)</label><input id="p-raw" placeholder="/path/to/rawdata" />
+        <label>DB name (optional)</label><input id="p-db" placeholder="connectometry.db.fib.gz" />
+        <label>Min file age (sec)</label><input id="p-age" value="300" />
+        <h3>Connectivity extraction</h3>
+        <label>Config path</label><input id="p-con-config" placeholder="graph_analysis_config.json" />
+        <label>Connectivity output dir</label><input id="p-con-output" placeholder="/path/to/connectivity" />
+        <label>Connectivity threads</label><input id="p-con-threads" placeholder="8" />
+        <div class="checkbox-row">
+          <label><input type="checkbox" id="p-mask" /> require_mask</label>
+          <label><input type="checkbox" id="p-t1w" /> require_t1w</label>
+          <label><input type="checkbox" id="p-skip" /> skip_existing</label>
+          <label><input type="checkbox" id="p-verify" /> verify_rawdata</label>
+          <label><input type="checkbox" id="p-pilot" /> pilot</label>
+          <label><input type="checkbox" id="p-dry" /> dry_run</label>
+          <label><input type="checkbox" id="p-con-run" /> run_connectivity</label>
+        </div>
+        <div class="actions">
+          <button onclick="runPipeline()">Run pipeline</button>
+          <button class="secondary" onclick="savePreset('pipeline')">Save preset</button>
+        </div>
+      </div>
+
+      <div class="card" id="connectometry-card">
+        <h2>Connectometry</h2>
+        <label>Config JSON</label><input id="c-config" placeholder="connectometry_config.json" />
+        <label>Output dir</label><input id="c-output" placeholder="/path/to/connectometry_results" />
+        <div class="row">
+          <div><label>Batch index</label><input id="c-batch" placeholder="" /></div>
+          <div><label>Workers</label><input id="c-workers" value="1" /></div>
+        </div>
+        <label>Custom params (JSON string)</label><textarea id="c-custom" placeholder='{"index_name":"qa"}'></textarea>
+        <label>Retry failed summary</label><input id="c-retry" placeholder="analysis_summary_*.json" />
+        <div class="checkbox-row">
+          <label><input type="checkbox" id="c-test" /> test</label>
+          <label><input type="checkbox" id="c-dry" /> dry_run</label>
+          <label><input type="checkbox" id="c-nohup" /> nohup</label>
+        </div>
+        <div class="actions">
+          <button onclick="runConnectometry()">Run connectometry</button>
+          <button class="secondary" onclick="savePreset('connectometry')">Save preset</button>
+        </div>
+      </div>
+
+      <div class="card" id="viewer-card">
+        <h2>Interactive viewer</h2>
+        <label>Input folder</label><input id="v-input" placeholder="connectometry_results/fa" />
+        <label>Output dir</label><input id="v-output" placeholder="connectometry_results/fa" />
+        <div class="row">
+          <div><label>Output name</label><input id="v-name" placeholder="interactive_viewer.html" /></div>
+          <div><label>JPEG quality</label><input id="v-quality" value="75" /></div>
+        </div>
+        <div class="row">
+          <div><label>Max width</label><input id="v-width" value="800" /></div>
+          <div><label>TT min bytes</label><input id="v-tt" value="2048" /></div>
+        </div>
+        <label>Placeholder image</label><input id="v-placeholder" placeholder="/path/to/placeholder.jpg" />
+        <label>Placeholder quality</label><input id="v-placeholder-q" placeholder="" />
+        <div class="checkbox-row">
+          <label><input type="checkbox" id="v-req-tt" checked /> require_tt</label>
+          <label><input type="checkbox" id="v-enable-ph" checked /> enable_placeholder</label>
+        </div>
+        <div class="actions">
+          <button onclick="runViewer()">Generate viewer</button>
+          <button class="secondary" onclick="savePreset('viewer')">Save preset</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="status">
+      <div class="actions">
+        <button class="secondary" onclick="refreshJobs()">Refresh jobs</button>
+        <button class="secondary" onclick="loadSettingsList()">List presets</button>
+      </div>
+      <pre id="log">Ready.</pre>
+    </div>
+    <div class="status">
+      <h3>Jobs</h3>
+      <div id="jobs"></div>
+    </div>
+    <div class="status">
+      <h3>Presets</h3>
+      <div id="presets"></div>
+    </div>
+  </main>
+
+<script>
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent = msg;
+}
+
+function boolVal(id) {
+  return document.getElementById(id).checked;
+}
+
+function val(id) {
+  return document.getElementById(id).value.trim();
+}
+
+function runPipeline() {
+  const payload = {
+    qsiprep_dir: val('p-qsiprep'),
+    output_dir: val('p-output'),
+    dsi_studio_path: val('p-dsi-path'),
+    dsi_studio_cmd: val('p-dsi-cmd'),
+    method: val('p-method'),
+    param0: val('p-param0'),
+    threads: val('p-threads'),
+    rawdata_dir: val('p-raw'),
+    db_name: val('p-db'),
+    min_file_age: val('p-age'),
+    connectivity_config: val('p-con-config'),
+    connectivity_output_dir: val('p-con-output'),
+    connectivity_threads: val('p-con-threads'),
+    require_mask: boolVal('p-mask'),
+    require_t1w: boolVal('p-t1w'),
+    skip_existing: boolVal('p-skip'),
+    verify_rawdata: boolVal('p-verify'),
+    pilot: boolVal('p-pilot'),
+    dry_run: boolVal('p-dry'),
+    run_connectivity: boolVal('p-con-run')
+  };
+  postJson('/api/run/pipeline', payload);
+}
+
+function runConnectometry() {
+  const payload = {
+    config: val('c-config'),
+    output: val('c-output'),
+    batch: val('c-batch'),
+    workers: val('c-workers'),
+    custom: val('c-custom'),
+    retry_failed: val('c-retry'),
+    test: boolVal('c-test'),
+    dry_run: boolVal('c-dry'),
+    nohup: boolVal('c-nohup')
+  };
+  postJson('/api/run/connectometry', payload);
+}
+
+function runViewer() {
+  const payload = {
+    input_folder: val('v-input'),
+    output: val('v-output'),
+    output_name: val('v-name'),
+    jpeg_quality: val('v-quality'),
+    max_width: val('v-width'),
+    tt_min_bytes: val('v-tt'),
+    placeholder: val('v-placeholder'),
+    placeholder_quality: val('v-placeholder-q'),
+    require_tt: boolVal('v-req-tt'),
+    enable_placeholder: boolVal('v-enable-ph')
+  };
+  postJson('/api/run/viewer', payload);
+}
+
+function savePreset(kind) {
+  let settings = {};
+  if (kind === 'pipeline') {
+    settings = {
+      kind,
+      qsiprep_dir: val('p-qsiprep'),
+      output_dir: val('p-output'),
+      dsi_studio_path: val('p-dsi-path'),
+      dsi_studio_cmd: val('p-dsi-cmd'),
+      method: val('p-method'),
+      param0: val('p-param0'),
+      threads: val('p-threads'),
+      rawdata_dir: val('p-raw'),
+      db_name: val('p-db'),
+      min_file_age: val('p-age'),
+      connectivity_config: val('p-con-config'),
+      connectivity_output_dir: val('p-con-output'),
+      connectivity_threads: val('p-con-threads'),
+      require_mask: boolVal('p-mask'),
+      require_t1w: boolVal('p-t1w'),
+      skip_existing: boolVal('p-skip'),
+      verify_rawdata: boolVal('p-verify'),
+      pilot: boolVal('p-pilot'),
+      dry_run: boolVal('p-dry'),
+      run_connectivity: boolVal('p-con-run')
+    };
+  } else if (kind === 'connectometry') {
+    settings = {
+      kind,
+      config: val('c-config'),
+      output: val('c-output'),
+      batch: val('c-batch'),
+      workers: val('c-workers'),
+      custom: val('c-custom'),
+      retry_failed: val('c-retry'),
+      test: boolVal('c-test'),
+      dry_run: boolVal('c-dry'),
+      nohup: boolVal('c-nohup')
+    };
+  } else if (kind === 'viewer') {
+    settings = {
+      kind,
+      input_folder: val('v-input'),
+      output: val('v-output'),
+      output_name: val('v-name'),
+      jpeg_quality: val('v-quality'),
+      max_width: val('v-width'),
+      tt_min_bytes: val('v-tt'),
+      placeholder: val('v-placeholder'),
+      placeholder_quality: val('v-placeholder-q'),
+      require_tt: boolVal('v-req-tt'),
+      enable_placeholder: boolVal('v-enable-ph')
+    };
+  }
+  postJson('/api/save_settings', { settings });
+}
+
+function postJson(url, payload) {
+  log('Sending...');
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(r => r.json()).then(data => {
+    if (data.ok) {
+      log(JSON.stringify(data, null, 2));
+      refreshJobs();
+    } else {
+      log('Error: ' + JSON.stringify(data));
+    }
+  }).catch(err => log('Request failed: ' + err));
+}
+
+function refreshJobs() {
+  fetch('/api/jobs').then(r => r.json()).then(data => {
+    const container = document.getElementById('jobs');
+    if (!data.length) { container.textContent = 'No jobs yet.'; return; }
+    container.innerHTML = data.map(j => {
+      return `<div><span class="pill ${j.status}">${j.status}</span> ${j.type} | log: ${j.log_file} <span class="small">started ${j.started_at || ''}</span></div>`;
+    }).join('');
+  }).catch(() => {});
+}
+
+function loadSettingsList() {
+  fetch('/api/list_settings').then(r => r.json()).then(data => {
+    const container = document.getElementById('presets');
+    if (!data.length) { container.textContent = 'No presets saved.'; return; }
+    container.innerHTML = data.map(f => `<div>${f.name} (${f.modified})</div>`).join('');
+  }).catch(() => {});
+}
+
+refreshJobs();
+loadSettingsList();
+</script>
+</body>
+</html>

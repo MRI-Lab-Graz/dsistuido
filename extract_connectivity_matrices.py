@@ -79,8 +79,19 @@ class ConnectivityExtractor:
     
     def __init__(self, config: Dict = None):
         """Initialize the extractor with configuration."""
-        self.config = {**DEFAULT_CONFIG, **(config or {})}
+        # Deep merge config with defaults to preserve nested dict defaults
+        self.config = self._merge_config(DEFAULT_CONFIG, config or {})
         self.setup_logging()
+    
+    def _merge_config(self, default: Dict, override: Dict) -> Dict:
+        """Deep merge override config into default config."""
+        result = default.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._merge_config(result[key], value)
+            else:
+                result[key] = value
+        return result
     
     def find_fib_files(self, input_folder: str, pattern: str = "*.fib.gz") -> List[str]:
         """
@@ -1402,6 +1413,9 @@ For more help: see README.md
     parser.add_argument('--no-csv', action='store_true', 
                        help='🚫 Skip automatic .mat to CSV conversion')
     
+    parser.add_argument('--dsi_studio_cmd', type=str,
+                       help='🔧 Override DSI Studio command path (e.g., /path/to/dsi_studio)')
+    
     args = parser.parse_args()
     
     # Show help if no arguments provided
@@ -1469,6 +1483,10 @@ For more help: see README.md
     # If neither --csv nor --no-csv specified, use config file setting (or default to True)
     
     config['connectivity_options'] = connectivity_options
+    
+    # Override DSI Studio command if provided via CLI
+    if args.dsi_studio_cmd:
+        config['dsi_studio_cmd'] = args.dsi_studio_cmd
     
     # Check for required arguments
     if not args.input or not args.output:
