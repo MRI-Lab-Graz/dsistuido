@@ -30,6 +30,8 @@ __pycache__
 # PyInstaller
 *.manifest
 *.spec
+*.log
+nohup*
 
 # Unit test / coverage reports
 htmlcov/

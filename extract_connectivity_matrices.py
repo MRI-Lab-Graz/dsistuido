@@ -1517,11 +1517,25 @@ For more help: see README.md
         sys.exit(0)
     
     # Load configuration from file if provided
+    # Helper function for deep merge (same as ConnectivityExtractor._merge_config)
+    def deep_merge_config(default: Dict, override: Dict) -> Dict:
+        """Deep merge override config into default config."""
+        import copy
+        result = copy.deepcopy(default)
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = deep_merge_config(result[key], value)
+            else:
+                result[key] = value
+        return result
+    
     config = DEFAULT_CONFIG.copy()
     if args.config:
         try:
             with open(args.config, 'r') as f:
-                config.update(json.load(f))
+                loaded_config = json.load(f)
+                # Use deep merge to properly combine nested dictionaries
+                config = deep_merge_config(DEFAULT_CONFIG, loaded_config)
         except FileNotFoundError:
             print(f"❌ Configuration file not found: {args.config}")
             sys.exit(1)

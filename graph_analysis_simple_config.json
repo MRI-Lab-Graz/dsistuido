@@ -1,14 +1,16 @@
 {
   "_comment": "Complete configuration for DSI Studio connectivity extraction",
   "_comment2": "All parameters explicitly defined for transparency",
+  "_comment3": "Updated to use atlases available in DSI Studio installation",
+  "_comment4": "AAL atlases are NOT available - use Brainnectome, HCP-MMP, or Brodmann instead",
   
   "atlases": [
-    "AAL3"
+    "Brainnectome",
+    "HCP-MMP"
   ],
   
   "connectivity_values": [
-    "count",
-    "ncount"
+    "count"
   ],
   
   "track_count": 1000000,
@@ -31,7 +33,7 @@
   },
   
   "connectivity_options": {
-    "connectivity_type": "end",
+    "connectivity_type": "pass",
     "connectivity_threshold": 0.001,
     "connectivity_output": "matrix,connectogram,measure",
     "convert_to_csv": true
