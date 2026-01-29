@@ -3,40 +3,12 @@
   "_comment2": "All parameters explicitly defined for transparency",
   
   "atlases": [
-    "AAL",
-    "AAL2",
-    "AAL3",
-    "Brodmann",
-    "HCP-MMP",
-    "AICHA",
-    "Talairach",
-    "FreeSurferDKT",
-    "FreeSurferDKT_Cortical",
-    "Schaefer100",
-    "Schaefer200",
-    "Schaefer400",
-    "Gordon333",
-    "Power264"
+    "AAL3"
   ],
   
   "connectivity_values": [
     "count",
-    "ncount",
-    "ncount2",
-    "mean_length",
-    "qa",
-    "fa",
-    "dti_fa",
-    "md",
-    "ad",
-    "rd",
-    "iso",
-    "rdi",
-    "ndi",
-    "dti_ad",
-    "dti_rd",
-    "dti_md",
-    "trk"
+    "ncount"
   ],
   
   "track_count": 1000000,

@@ -161,6 +161,63 @@ class DSIStudioPipeline:
         except Exception as e:
             self.logger.warning(f"CUDA check encountered an issue: {e}")
 
+    def _cleanup_intermediate_files(self, directory: Path):
+        """Delete intermediate .tar.gz and other temporary compressed files to save space.
+        
+        Only removes temporary archive files (.tar.gz, .tar.bz2, .tar.xz).
+        All analysis outputs are preserved: .csv, .mat, .txt, .fib.gz, .src.gz, .json, .html
+        """
+        if not directory.exists():
+            return
+        
+        patterns = ['*.tar.gz', '*.tar.bz2', '*.tar.xz']
+        deleted_count = 0
+        
+        for pattern in patterns:
+            for file in directory.rglob(pattern):
+                try:
+                    size_mb = file.stat().st_size / (1024 * 1024)
+                    file.unlink()
+                    self.logger.info(f"Deleted intermediate file: {file.name} ({size_mb:.1f} MB)")
+                    deleted_count += 1
+                except Exception as e:
+                    self.logger.warning(f"Failed to delete {file}: {e}")
+        
+        if deleted_count > 0:
+            self.logger.info(f"Cleanup: Removed {deleted_count} intermediate files")
+
+    def _shorten_filename(self, original_name: str, sub_id: str, ses_id: str = "", file_type: str = "") -> str:
+        """Create a shortened filename while preserving key information for Windows compatibility.
+        
+        Pattern: {sub}_{ses}_{type}_{param}.{ext}
+        Example: sub1292092_ses3_fib_q1p25.fib.gz instead of sub-1292092_ses-3_desc-long_name.fib.gz
+        """
+        # Extract key components
+        sub_short = sub_id.replace('sub-', '')
+        ses_short = ses_id.replace('ses-', '') if ses_id and ses_id != 'ses-1' else ""
+        
+        # Get file extension
+        parts = original_name.rsplit('.', 2)  # Handle .fib.gz, .src.gz, etc
+        if len(parts) >= 2:
+            ext = '.'.join(parts[-2:]) if parts[-1] in ['gz', 'sz'] else parts[-1]
+        else:
+            ext = parts[-1] if parts else 'file'
+        
+        # Create method abbreviation
+        method_abbr = f"m{self.method}" if self.method else "m4"
+        param_abbr = f"p{self.param0.replace('.', '')}".replace('.', '') if self.param0 else "p125"
+        
+        # Build short name
+        base_parts = [f"s{sub_short}"]  # s = subject
+        if ses_short:
+            base_parts.append(f"e{ses_short}")  # e = session
+        if file_type:
+            base_parts.append(file_type[:3])  # f=fib, s=src, d=diff
+        base_parts.append(f"{method_abbr}{param_abbr}")
+        
+        short_name = '_'.join(base_parts) + '.' + ext
+        return short_name
+
     def _decompress_sz(self, zipped_path: Path) -> Optional[Path]:
         """Convert a .sz archive produced by DSI Studio into the base file."""
         if not zipped_path.exists():
@@ -423,8 +480,13 @@ class DSIStudioPipeline:
         output_path = self.diff_dir / output_name
         
         if output_path.exists() and self.skip_existing:
-            self.logger.info(f"Diff already exists, skipping: {output_name}")
-            return output_path
+            # Check if file has content (not 0 bytes from previous failed attempt)
+            if output_path.stat().st_size > 0:
+                self.logger.info(f"Diff already exists, skipping: {output_name}")
+                return output_path
+            else:
+                self.logger.warning(f"Diff file exists but is empty (0 bytes), will regenerate: {output_name}")
+                output_path.unlink()  # Delete the empty file
 
         # Use the specialized create_differential_fib.py script
         script_path = Path(__file__).parent / "create_differential_fib.py"
@@ -438,7 +500,15 @@ class DSIStudioPipeline:
         
         self.logger.info(f"Computing longitudinal change (v2): {ses_f} - {ses_b} for {sub_f}")
         if self.run_command(cmd):
-            return output_path
+            # Verify output file was created and has content
+            if output_path.exists() and output_path.stat().st_size > 0:
+                return output_path
+            else:
+                self.logger.error(f"Differential FIB creation failed or produced empty file: {output_path}")
+                # Clean up empty file if it exists
+                if output_path.exists():
+                    output_path.unlink()
+                return None
         return None
 
     def run_connectivity_extraction(self, fib_files: List[Path]):
@@ -472,10 +542,28 @@ class DSIStudioPipeline:
             self.logger.error("No FIB files found to create database")
             return
         
+        # Filter out invalid files (0 bytes or non-existent)
+        valid_fibs = []
+        for fib in fib_files:
+            if not fib.exists():
+                self.logger.warning(f"FIB file does not exist, skipping: {fib}")
+                continue
+            if fib.stat().st_size == 0:
+                self.logger.warning(f"FIB file is empty (0 bytes), skipping: {fib}")
+                continue
+            valid_fibs.append(fib)
+        
+        if not valid_fibs:
+            self.logger.error("No valid FIB files found for database creation (all files were invalid or missing)")
+            return
+        
+        if len(valid_fibs) < len(fib_files):
+            self.logger.warning(f"Database creation: {len(fib_files) - len(valid_fibs)} invalid files were skipped")
+        
         if output_db is None:
             output_db = self.output_dir / self.db_name
         
-        fib_list = ",".join([str(f) for f in fib_files])
+        fib_list = ",".join([str(f) for f in valid_fibs])
         
         cmd = [
             self.dsi_studio_cmd,
@@ -676,6 +764,15 @@ class DSIStudioPipeline:
             elif fib_files:
                 # No participants.tsv, create database anyway
                 self.create_database(fib_files)
+        
+        # --- Cleanup Phase ---
+        # Delete intermediate .tar.gz and other temporary files to free space
+        self.logger.info("🧹 Starting cleanup of intermediate files...")
+        self._cleanup_intermediate_files(self.src_dir)
+        self._cleanup_intermediate_files(self.fib_dir)
+        self._cleanup_intermediate_files(self.diff_dir)
+        self._cleanup_intermediate_files(self.connectivity_output_dir)
+        self.logger.info("✓ Cleanup complete")
         
         self.logger.info(
             f"Pipeline completed. Processed={self.stats['processed']}, Found={self.stats.get('found', len(dwi_files))}, "

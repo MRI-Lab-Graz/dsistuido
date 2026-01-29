@@ -93,6 +93,90 @@ class ConnectivityExtractor:
                 result[key] = value
         return result
     
+    def cleanup_temporary_files(self, directory: Path, patterns: List[str] = None):
+        """Delete temporary .tt.gz and similar files to save space.
+        
+        Only removes temporary track files (.tt.gz, .tt) generated during processing.
+        All analysis outputs are preserved: .csv, .mat, .txt, .connectivity files, etc.
+        
+        Parameters:
+        -----------
+        directory : Path
+            Directory to clean
+        patterns : List[str]
+            File patterns to delete (default: [*.tt.gz, *.tt])
+        """
+        if patterns is None:
+            patterns = ['*.tt.gz', '*.tt']
+        
+        if not directory.exists():
+            return
+        
+        deleted_count = 0
+        deleted_size_mb = 0
+        
+        for pattern in patterns:
+            for file in Path(directory).rglob(pattern):
+                try:
+                    size_mb = file.stat().st_size / (1024 * 1024)
+                    file.unlink()
+                    deleted_size_mb += size_mb
+                    deleted_count += 1
+                except Exception as e:
+                    self.logger.warning(f"Failed to delete {file}: {e}")
+        
+        if deleted_count > 0:
+            self.logger.info(f"🧹 Cleanup: Removed {deleted_count} temporary files ({deleted_size_mb:.1f} MB)")
+    
+    def shorten_filename(self, original_name: str, atlas: str, base_name: str) -> str:
+        """Create a shortened filename for Windows compatibility.
+        
+        Pattern: {sub}_{ses}_{atlas}_{metric}.{ext}
+        Example: s1292092_e3_AAL_qa.connectivity.mat instead of 
+                 sub-1292092_ses-3_AAL_000.qa.txt.connectivity.mat
+        """
+        # Extract subject and session if present
+        parts = base_name.split('_')
+        sub_id = next((p.replace('sub-', '') for p in parts if p.startswith('sub-')), 'unknown')
+        ses_id = next((p.replace('ses-', '') for p in parts if p.startswith('ses-')), '')
+        
+        # Get file extension
+        if '.connectivity.' in original_name:
+            # Format: something.connectivity.mat or .connectivity.txt
+            ext = original_name.split('.connectivity.')[-1]
+            metric = 'conn'
+        elif '.connectogram' in original_name:
+            ext = original_name.split('.connectogram')[-1].lstrip('.')
+            metric = 'gram'
+        elif '.network_measures' in original_name:
+            ext = original_name.split('.network_measures')[-1].lstrip('.')
+            metric = 'meas'
+        else:
+            # Fallback: extract last extension
+            ext = original_name.rsplit('.', 1)[-1] if '.' in original_name else 'file'
+            metric = ''
+        
+        # Extract metric from original name if present (e.g., .qa.txt -> qa)
+        metric_match = None
+        if not metric:
+            for conn_metric in ['qa', 'fa', 'md', 'ad', 'rd', 'count', 'ncount']:
+                if f'.{conn_metric}.' in original_name or f'.{conn_metric}_' in original_name:
+                    metric_match = conn_metric[:2]  # qa->qa, fa->fa, etc
+                    break
+        
+        # Build short name: s{sub}_e{ses}_{atlas}_{metric}.{ext}
+        short_parts = [f"s{sub_id}"]
+        if ses_id:
+            short_parts.append(f"e{ses_id}")
+        short_parts.append(atlas[:3].lower())  # AAL -> aal, HCP -> hcp
+        if metric_match:
+            short_parts.append(metric_match)
+        elif metric:
+            short_parts.append(metric)
+        
+        short_name = '_'.join(short_parts) + '.' + ext
+        return short_name
+    
     def find_fib_files(self, input_folder: str, pattern: str = "*.fib.gz") -> List[str]:
         """
         Find all fiber files in a folder, supporting both .fib.gz and .fz extensions.
@@ -693,6 +777,12 @@ class ConnectivityExtractor:
             self.logger.info("⏭️ Skipping CSV conversion (disabled)")
             csv_conversion = {'success': True, 'total_converted': 0, 'skipped': True}
             summary['csv_conversion'] = csv_conversion
+        
+        # --- Cleanup Phase ---
+        # Delete temporary .tt.gz files generated during tracking
+        self.logger.info("🧹 Cleaning up temporary files...")
+        self.cleanup_temporary_files(run_dir, patterns=['*.tt.gz', '*.tt'])
+        self.logger.info("✓ Cleanup complete")
         
         self.logger.info(f"Extraction completed: {summary['summary']['successful']}/{summary['summary']['total_atlases']} successful")
         if csv_conversion.get('success') and csv_conversion.get('total_converted', 0) > 0:
