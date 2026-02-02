@@ -3,55 +3,30 @@
   "_comment2": "All parameters explicitly defined for transparency",
   
   "atlases": [
-    "AAL",
-    "AAL2",
-    "AAL3",
-    "Brodmann",
-    "HCP-MMP",
-    "AICHA",
-    "Talairach",
-    "FreeSurferDKT",
-    "FreeSurferDKT_Cortical",
-    "Schaefer100",
-    "Schaefer200",
-    "Schaefer400",
-    "Gordon333",
-    "Power264"
+    "AAL3"
   ],
   
   "connectivity_values": [
     "count",
     "ncount",
-    "ncount2",
-    "mean_length",
-    "qa",
-    "fa",
-    "dti_fa",
-    "md",
-    "ad",
-    "rd",
-    "iso",
-    "rdi",
-    "ndi",
-    "dti_ad",
-    "dti_rd",
-    "dti_md",
-    "trk"
+    "ncount2"
   ],
   
-  "track_count": 1000000,
+  "track_count": 5000000,
   "thread_count": 8,
-  "dsi_studio_cmd": "dsi_studio",
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
+  "reconstruction_method": 4,
+  "_comment_reconstruction": "4=GQI (native space), 7=QSDR (MNI space). Must match pipeline --method",
   
   "tracking_parameters": {
     "method": 0,
     "otsu_threshold": 0.6,
     "fa_threshold": 0.0,
-    "turning_angle": 0.0,
+    "turning_angle": 35,
     "step_size": 0.0,
     "smoothing": 0.0,
     "min_length": 30,
-    "max_length": 300,
+    "max_length": 250,
     "track_voxel_ratio": 2.0,
     "check_ending": 0,
     "random_seed": 0,

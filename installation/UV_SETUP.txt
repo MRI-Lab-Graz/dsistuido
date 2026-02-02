@@ -1,0 +1,76 @@
+================================================================================
+UV-POWERED INSTALLATION
+================================================================================
+
+Your DSI Studio installer now uses UV for blazing-fast package management!
+
+WHAT IS UV?
+===========
+UV is a modern Python package installer from Astral that's:
+  ⚡ 10-100x FASTER than pip
+  🔒 Reliable with deterministic dependency resolution
+  🎯 Reproducible installs across machines
+  📦 Written in Rust for maximum performance
+
+GitHub: https://github.com/astral-sh/uv
+
+QUICK START
+===========
+$ cd installation
+$ bash setup_env.sh
+$ cd ..
+$ source venv/bin/activate
+
+The setup script automatically:
+  ✓ Checks if UV is installed (installs if needed)
+  ✓ Creates virtual environment with UV
+  ✓ Installs all dependencies with UV
+  ✓ Verifies installation
+
+INSTALLATION TIME COMPARISON
+============================
+Traditional pip approach:  2-5 minutes (cold cache)
+UV approach:              30-60 seconds
+
+Subsequent installs:
+Traditional pip:          1-2 minutes
+UV:                       Few seconds
+
+FEATURES
+========
+✓ Smart caching - reuses downloaded packages
+✓ Parallel downloads - multiple packages at once
+✓ Lock file support - reproducible builds (optional)
+✓ Deterministic resolution - same deps every time
+✓ Zero network for cached installs
+
+TROUBLESHOOTING
+===============
+If UV installation fails:
+  1. Manual install: pip install uv
+  2. Run setup again: bash setup_env.sh
+
+Clear cache if needed:
+  rm -rf ~/.cache/uv
+
+USING UV AFTER SETUP
+====================
+# Install new package
+uv pip install package_name
+
+# Upgrade package
+uv pip install --upgrade package_name
+
+# List installed packages
+uv pip list
+
+# Freeze requirements
+uv pip freeze > requirements.txt
+
+LEARN MORE
+==========
+- UV Docs: https://docs.astral.sh/uv/
+- GitHub: https://github.com/astral-sh/uv
+- Installation: https://github.com/astral-sh/uv#getting-started
+
+================================================================================

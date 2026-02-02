@@ -521,8 +521,6 @@ class ConnectivityExtractor:
     
     def create_output_structure(self, output_dir: str, base_name: str) -> Path:
         """Create organized output directory structure based on settings."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
         # Create parameter-based directory name for better organization
         tracking_params = self.config.get('tracking_parameters', {})
         method_name = {0: 'streamline', 1: 'rk4', 2: 'voxel'}.get(tracking_params.get('method', 0), 'streamline')
@@ -535,7 +533,7 @@ class ConnectivityExtractor:
         if tracking_params.get('fa_threshold', 0) != 0:
             param_dir += f"_fa{tracking_params['fa_threshold']:.2f}"
             
-        run_dir = Path(output_dir) / f"{base_name}_{timestamp}" / param_dir
+        run_dir = Path(output_dir) / base_name / param_dir
         run_dir.mkdir(parents=True, exist_ok=True)
         
         # Create organized subdirectories
@@ -1506,6 +1504,9 @@ For more help: see README.md
     parser.add_argument('--dsi_studio_cmd', type=str,
                        help='🔧 Override DSI Studio command path (e.g., /path/to/dsi_studio)')
     
+    parser.add_argument('--reconstruction_method', type=int, choices=[4, 7],
+                       help='🔬 Override config: Reconstruction method (4=GQI/native, 7=QSDR/MNI)')
+    
     args = parser.parse_args()
     
     # Show help if no arguments provided
@@ -1591,6 +1592,11 @@ For more help: see README.md
     # Override DSI Studio command if provided via CLI
     if args.dsi_studio_cmd:
         config['dsi_studio_cmd'] = args.dsi_studio_cmd
+    
+    # Override reconstruction method if provided via CLI
+    if args.reconstruction_method is not None:
+        config['reconstruction_method'] = args.reconstruction_method
+        logging.info(f"Overriding reconstruction_method from CLI: {args.reconstruction_method}")
     
     # Check for required arguments
     if not args.input or not args.output:

@@ -1,5 +1,33 @@
 # DSI Studio Pipeline - Configuration Guide
 
+## Pipeline Command-Line Flags
+
+### `--skip_existing` and `--force`
+
+These flags control how the pipeline handles existing output files:
+
+- **`--skip_existing`**: Skip processing if output files (SRC, FIB, differential FIB) already exist
+  - Use this to resume interrupted pipeline runs
+  - Speeds up processing by skipping completed subjects
+  
+- **`--force`**: Force overwrite existing files even when `--skip_existing` is set
+  - Use this when you need to regenerate files (e.g., after fixing corrupted data)
+  - Overrides the skip behavior for all output types
+  
+**Example usage:**
+```bash
+# Normal run - always process all files
+python dsi_studio_pipeline.py --qsiprep_dir /data/qsiprep --output_dir /data/output
+
+# Resume run - skip existing files
+python dsi_studio_pipeline.py --qsiprep_dir /data/qsiprep --output_dir /data/output --skip_existing
+
+# Regenerate specific files - force overwrite even with skip_existing
+python dsi_studio_pipeline.py --qsiprep_dir /data/qsiprep --output_dir /data/output --skip_existing --force
+```
+
+---
+
 ## How Configuration Works
 
 The connectivity extraction uses a **deep merge** strategy:

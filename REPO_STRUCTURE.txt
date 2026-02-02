@@ -1,0 +1,88 @@
+================================================================================
+DSI Studio Repository - Clean Restructured Layout
+================================================================================
+
+Root Directory (Clean - only essential files)
+├── README.md                   # MAIN DOCUMENTATION - start here!
+├── REPO_STRUCTURE.txt          # This file
+├── .git/
+├── .gitignore
+└── venv/                       # Virtual environment (generated)
+
+Organized Subdirectories
+├── installation/               # Installation & setup
+│   ├── SETUP.md                # Installation guide
+│   ├── setup_env.sh            # Auto setup script
+│   ├── install.sh              # Installation helper
+│   └── requirements.txt        # Python dependencies
+│
+├── scripts/                    # All executable scripts
+│   ├── dsi_studio_pipeline.py          # Main pipeline
+│   ├── extract_connectivity_matrices.py # Connectivity extraction
+│   ├── run_connectometry_batch.py      # Batch connectometry
+│   ├── validate_setup.py               # Setup validation
+│   ├── webui.py                        # Web UI
+│   ├── inspect_fib.py                  # FIB inspection
+│   ├── utils.py                        # Shared utilities
+│   ├── *.sh                            # Utility shell scripts
+│   └── convert_mat_to_csv.py          # Data conversion
+│
+├── configs/                    # Configuration templates
+│   ├── example_config.json
+│   ├── graph_analysis_config.json
+│   ├── connectivity_config.json
+│   ├── connectometry_config.json
+│   ├── graph_analysis_simple_config.json
+│   └── research_config.json
+│
+├── docs/                       # Documentation
+│   ├── CONFIGURATION_GUIDE.md          # Detailed configuration ref
+│   ├── PIPELINE_ENHANCEMENTS.md        # Feature overview
+│   └── ENHANCEMENTS_SUMMARY.txt        # Additional details
+│
+├── code/                       # Shared utilities & libraries
+│   └── src_parallel.sh
+│
+└── [Data folders - generated during runtime]
+    ├── connectometry_results/
+    ├── logs/
+    ├── templates/
+    ├── theme_template/
+    └── tmp/
+
+================================================================================
+USAGE QUICK START
+================================================================================
+
+1. SETUP (First time only)
+   $ cd installation
+   $ bash setup_env.sh
+   $ cd ..
+   $ source venv/bin/activate
+
+2. VALIDATE
+   $ python scripts/validate_setup.py --config configs/example_config.json
+
+3. RUN
+   $ python scripts/dsi_studio_pipeline.py \
+       --qsiprep_dir /path/to/qsiprep \
+       --output_dir /path/to/output \
+       --run_connectivity \
+       --connectivity_config configs/graph_analysis_config.json
+
+See README.md for complete documentation!
+
+================================================================================
+KEY IMPROVEMENTS
+================================================================================
+
+✓ Clean root directory - only essential files
+✓ Scripts organized in single 'scripts/' folder
+✓ Configurations in dedicated 'configs/' folder
+✓ Documentation in 'docs/' folder
+✓ Installation files in 'installation/' folder
+✓ Single comprehensive README.md with all usage instructions
+✓ No clutter - temporary files and logs kept organized
+✓ Easy to navigate and understand project structure
+
+================================================================================
