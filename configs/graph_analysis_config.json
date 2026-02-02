@@ -3,7 +3,8 @@
   "_comment2": "All parameters explicitly defined for transparency",
   
   "atlases": [
-    "AAL3"
+    "AAL3",
+    "Brainnectome"
   ],
   
   "connectivity_values": [

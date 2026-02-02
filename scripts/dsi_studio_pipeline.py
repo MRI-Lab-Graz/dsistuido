@@ -89,7 +89,14 @@ class DSIStudioPipeline:
         self.require_mask = args.require_mask
         self.require_t1w = args.require_t1w
         self.skip_existing = args.skip_existing
-        self.force = args.force
+        self.force_arg = args.force
+        # Parse force argument: can be 'database', 'diffs', 'src', 'fib', 'all', or None
+        self.force_components = set()
+        if self.force_arg:
+            if self.force_arg == 'all':
+                self.force_components = {'src', 'fib', 'diffs', 'database'}
+            else:
+                self.force_components.add(self.force_arg)
         self.min_file_age = args.min_file_age  # Minimum age in seconds
         self.dry_run = args.dry_run
         self.run_connectivity = args.run_connectivity
@@ -170,6 +177,17 @@ class DSIStudioPipeline:
             self.logger.warning("nvidia-smi not found; skipping CUDA check.")
         except Exception as e:
             self.logger.warning(f"CUDA check encountered an issue: {e}")
+
+    def _should_force(self, component: str) -> bool:
+        """Check if a specific component should be force-regenerated.
+        
+        Args:
+            component: One of 'src', 'fib', 'diffs', 'database'
+        
+        Returns:
+            True if force regeneration is enabled for this component
+        """
+        return component in self.force_components
 
     def _cleanup_intermediate_files(self, directory: Path):
         """Delete intermediate .tar.gz and other temporary compressed files to save space.
@@ -496,11 +514,11 @@ class DSIStudioPipeline:
         src_exists = output_src.exists() or Path(f"{output_src}.sz").exists()
         actual_src = output_src if output_src.exists() else Path(f"{output_src}.sz") if Path(f"{output_src}.sz").exists() else None
         
-        if src_exists and self.skip_existing and not self.force:
+        if src_exists and self.skip_existing and not self._should_force('src'):
             self.logger.info(f"SRC exists, skipping generation: {actual_src.name if actual_src else output_src.name}")
             return actual_src or output_src
-        elif src_exists and self.force:
-            self.logger.info(f"SRC exists but --force is set, will overwrite: {actual_src.name if actual_src else output_src.name}")
+        elif src_exists and self._should_force('src'):
+            self.logger.info(f"SRC exists but --force src is set, will overwrite: {actual_src.name if actual_src else output_src.name}")
 
         self.logger.info(f"Running: {' '.join(cmd)}")
         if self.run_command(cmd):
@@ -537,12 +555,12 @@ class DSIStudioPipeline:
             matches = list(self.fib_dir.glob(pattern))
             existing_fib.extend(matches)
         
-        if existing_fib and self.skip_existing and not self.force:
+        if existing_fib and self.skip_existing and not self._should_force('fib'):
             self.logger.info(f"FIB (method {self.method}) exists, skipping: {existing_fib[0].name}")
             self.stats["skipped_existing"] += 1
             return existing_fib[0]
-        elif existing_fib and self.force:
-            self.logger.info(f"FIB (method {self.method}) exists but --force is set, will overwrite: {existing_fib[0].name}")
+        elif existing_fib and self._should_force('fib'):
+            self.logger.info(f"FIB (method {self.method}) exists but --force fib is set, will overwrite: {existing_fib[0].name}")
         elif self.skip_existing:
             # Check if other method files exist (but requested method doesn't)
             all_fibs = list(self.fib_dir.glob(f"{subject_prefix}*"))
@@ -596,7 +614,7 @@ class DSIStudioPipeline:
         output_name = f"{sub_f}_{ses_f}_minus_{ses_b}.fib.gz"
         output_path = self.diff_dir / output_name
         
-        if output_path.exists() and self.skip_existing and not self.force:
+        if output_path.exists() and self.skip_existing and not self._should_force('diffs'):
             # Check if file has content (not 0 bytes from previous failed attempt)
             if output_path.stat().st_size > 0:
                 self.logger.info(f"Diff already exists, skipping: {output_name}")
@@ -604,8 +622,8 @@ class DSIStudioPipeline:
             else:
                 self.logger.warning(f"Diff file exists but is empty (0 bytes), will regenerate: {output_name}")
                 output_path.unlink()  # Delete the empty file
-        elif output_path.exists() and self.force:
-            self.logger.info(f"Diff file exists but --force is set, will overwrite: {output_name}")
+        elif output_path.exists() and self._should_force('diffs'):
+            self.logger.info(f"Diff file exists but --force diffs is set, will overwrite: {output_name}")
 
         # Use the specialized create_differential_fib.py script
         script_path = Path(__file__).parent / "create_differential_fib.py"
@@ -887,13 +905,46 @@ class DSIStudioPipeline:
                     self.logger.info(f"✓ SRC validated: {src.name} ({src.stat().st_size / (1024*1024):.1f} MB)")
                 
                 fib = self.reconstruct_fib(src)
+                self.logger.debug(f"reconstruct_fib returned: {fib}")
                 if fib:
                     fib_files.append(fib)
+                    self.logger.debug(f"Added FIB to list: {fib.name}, total now: {len(fib_files)}")
                     session_info['fib_file'] = fib.name
                     session_info['status'] = 'success'
                     self.stats["processed"] += 1
+                else:
+                    self.logger.debug(f"reconstruct_fib returned None/False")
             else:
-                self.stats["skipped_missing"] += 1
+                # If SRC generation was skipped, check if FIB already exists
+                if self.skip_existing:
+                    # Use the same base_id logic as generate_src
+                    dwi_subject_id = dwi.name.split('_')[0]
+                    dwi_session_id = ""
+                    if "_ses-" in dwi.name:
+                        dwi_session_id = "_" + dwi.name.split('_')[1]
+                    subject_prefix = f"{dwi_subject_id}{dwi_session_id}"
+                    
+                    method_suffixes = {
+                        '4': ['.odf.gqi.fz'],  # GQI
+                        '7': ['.odf.qsdr.fz'],  # QSDR
+                    }
+                    method_key = str(self.method) if self.method else '4'
+                    expected_suffixes = method_suffixes.get(method_key, ['*'])
+                    
+                    for suffix in expected_suffixes:
+                        pattern = f"{subject_prefix}{suffix}"
+                        matches = list(self.fib_dir.glob(pattern))
+                        self.logger.debug(f"Looking for FIB: {pattern} in {self.fib_dir} -> {len(matches)} matches")
+                        if matches:
+                            fib = matches[0]
+                            fib_files.append(fib)
+                            self.logger.debug(f"Added FIB file: {fib.name}")
+                            session_info['fib_file'] = fib.name
+                            session_info['status'] = 'success'
+                            self.stats["skipped_existing"] += 1
+                            break
+                else:
+                    self.stats["skipped_missing"] += 1
             
             # Track for HTML report
             if sub_id not in self.subject_details:
@@ -901,7 +952,9 @@ class DSIStudioPipeline:
             self.subject_details[sub_id].append(session_info)
 
         if self.run_connectivity:
-            self.logger.info("Starting connectivity extraction step")
+            self.logger.info(f"Starting connectivity extraction step (found {len(fib_files)} FIB files)")
+            if not fib_files:
+                self.logger.warning("No FIB files found for connectivity extraction!")
             self.run_connectivity_extraction(fib_files)
         
         # --- Longitudinal Processing ---
@@ -946,6 +999,14 @@ class DSIStudioPipeline:
         # Create longitudinal databases
         for group_key, group_fibs in diff_groups.items():
             db_path = self.output_dir / f"longitudinal_{group_key}.db.fib.gz"
+            
+            # Check if database already exists
+            if db_path.exists() and self.skip_existing and not self._should_force('database'):
+                self.logger.info(f"Longitudinal database exists, skipping: {db_path.name}")
+                continue
+            elif db_path.exists() and self._should_force('database'):
+                self.logger.info(f"Longitudinal database exists but --force database is set, will overwrite: {db_path.name}")
+            
             self.logger.info(f"Creating longitudinal database for {group_key} ({len(group_fibs)} subjects)")
             self.create_database(group_fibs, output_db=db_path, index_name="qa")
 
@@ -1037,7 +1098,7 @@ if __name__ == "__main__":
     parser.add_argument("--require_mask", action="store_true", help="Skip subjects without brain mask")
     parser.add_argument("--require_t1w", action="store_true", help="Skip subjects without T1w")
     parser.add_argument("--skip_existing", action="store_true", help="Skip subjects if SRC/FIB already exist")
-    parser.add_argument("--force", action="store_true", help="Force overwrite existing files (overrides --skip_existing)")
+    parser.add_argument("--force", nargs='?', const='all', help="Force overwrite: 'database' (only db), 'diffs', 'src', 'fib', 'all' (default: all)")
     parser.add_argument("--min_file_age", type=int, default=300, help="Minimum file age in seconds (default: 300s/5min) to avoid processing files still being written")
     parser.add_argument("--pilot", action="store_true", help="Process only one randomly chosen subject")
     parser.add_argument("--dry_run", action="store_true", help="Show commands without running them")

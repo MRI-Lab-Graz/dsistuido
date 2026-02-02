@@ -561,6 +561,16 @@ class ConnectivityExtractor:
         atlas_dir = output_dir / "by_atlas" / atlas
         output_prefix = atlas_dir / f"{base_name}_{atlas}"
         
+        # Check if this atlas has already been processed (skip_existing)
+        if atlas_dir.exists() and any(atlas_dir.glob(f"{base_name}_{atlas}*")):
+            self.logger.info(f"Atlas '{atlas}' already processed, skipping: {atlas_dir.name}")
+            return {
+                'atlas': atlas,
+                'success': True,
+                'skipped': True,
+                'output_dir': str(atlas_dir)
+            }
+        
         # Build DSI Studio command with comprehensive parameters
         cmd = [
             self.config['dsi_studio_cmd'],
