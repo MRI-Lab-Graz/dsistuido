@@ -24,6 +24,27 @@ import shutil
 import concurrent.futures
 import random
 
+
+def _sanitize_dsi_environment() -> Dict[str, str]:
+    """Return a subprocess environment safe for DSI Studio execution.
+
+    Removes legacy MATLAB MCR paths from LD_LIBRARY_PATH to avoid Qt/libstdc++
+    conflicts that can break DSI Studio startup or figure export.
+    """
+    env = os.environ.copy()
+    ld_lib = env.get('LD_LIBRARY_PATH', '')
+    if not ld_lib:
+        return env
+
+    parts = [p for p in ld_lib.split(':') if p]
+    filtered = [p for p in parts if 'conn_standalone/MCR' not in p and '/MCR/' not in p]
+
+    if filtered:
+        env['LD_LIBRARY_PATH'] = ':'.join(filtered)
+    else:
+        env.pop('LD_LIBRARY_PATH', None)
+    return env
+
 # Force Qt to use minimal platform for headless execution
 # This avoids "Could not find the Qt platform plugin" errors on servers without display
 # os.environ['QT_QPA_PLATFORM'] = 'minimal'
@@ -97,7 +118,8 @@ class ConnectometryBatchAnalysis:
             result = subprocess.run(
                 [self.dsi_studio_cmd, '--version'],
                 capture_output=True,
-                timeout=10
+                timeout=10,
+                env=_sanitize_dsi_environment(),
             )
             if result.returncode != 0:
                 # Fallback to checking if file exists and is executable if --version fails
@@ -143,13 +165,15 @@ class ConnectometryBatchAnalysis:
         elif 'source' in params:
             cmd.append(f'--source={params["source"]}')
         
-        # Demographics file (required)
+        # Demographics file (optional - skip if empty, placeholder, or not a real path)
         if 'demo' not in params and 'demo' in core_params:
-            demo = core_params['demo'].get('value')
-            if demo:
+            demo = core_params['demo'].get('value', '').strip()
+            if demo and not demo.startswith('/path/to') and Path(demo).exists():
                 cmd.append(f'--demo={demo}')
         elif 'demo' in params:
-            cmd.append(f'--demo={params["demo"]}')
+            demo = str(params['demo']).strip()
+            if demo and not demo.startswith('/path/to') and Path(demo).exists():
+                cmd.append(f'--demo={demo}')
         
         # Variable list (required)
         if 'variable_list' not in params and 'variable_list' in core_params:
@@ -344,7 +368,8 @@ class ConnectometryBatchAnalysis:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=7200  # 2 hour timeout
+                timeout=7200,  # 2 hour timeout
+                env=_sanitize_dsi_environment(),
             )
             
             end = time.time()
