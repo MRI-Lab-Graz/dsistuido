@@ -17,7 +17,7 @@ import logging
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Sequence
 import itertools
 import time
 import shutil
@@ -85,6 +85,234 @@ class ConnectometryBatchAnalysis:
         self._validate_dsi_studio()
         
         self.results = []
+
+    def _extract_output_prefix(self, cmd: List[str]) -> Optional[Path]:
+        """Extract the output prefix path from a DSI Studio command."""
+        output_arg = next((arg for arg in cmd if arg.startswith('--output=')), None)
+        if not output_arg:
+            return None
+        return Path(output_arg.split('=', 1)[1])
+
+    def _collect_tract_outputs(self, output_prefix: Optional[Path]) -> List[Path]:
+        """Return non-trivial tract outputs produced by a connectometry run."""
+        if output_prefix is None:
+            return []
+
+        tract_paths = [
+            Path(f"{output_prefix}.inc.tt.gz"),
+            Path(f"{output_prefix}.dec.tt.gz"),
+        ]
+        return [path for path in tract_paths if path.exists() and path.stat().st_size > 1000]
+
+    def _expected_jpg_path(self, tt_path: Path) -> Path:
+        """Map xxx.tt.gz -> xxx.jpg for connectometry tract outputs."""
+        name = tt_path.name
+        if name.endswith('.tt.gz'):
+            return tt_path.with_name(name[:-6] + '.jpg')
+        return tt_path.with_suffix('.jpg')
+
+    def _populate_findings(self, result: Dict[str, Any], output_prefix: Optional[Path]) -> None:
+        """Annotate result with increased/decreased tract findings."""
+        if output_prefix is None:
+            return
+
+        inc_track = Path(f"{output_prefix}.inc.tt.gz")
+        result['findings_increased'] = inc_track.exists() and inc_track.stat().st_size > 1000
+        if result['findings_increased']:
+            self.logger.info("  -> Found INCREASED connectivity findings")
+
+        dec_track = Path(f"{output_prefix}.dec.tt.gz")
+        result['findings_decreased'] = dec_track.exists() and dec_track.stat().st_size > 1000
+        if result['findings_decreased']:
+            self.logger.info("  -> Found DECREASED connectivity findings")
+
+    def _recover_missing_jpgs(self, output_prefix: Optional[Path]) -> Dict[str, Any]:
+        """Render missing JPG previews from tract outputs using the fallback helper script."""
+        tract_paths = self._collect_tract_outputs(output_prefix)
+        if not tract_paths:
+            return {
+                'attempted': False,
+                'success': False,
+                'message': 'No tract outputs available for JPG recovery.'
+            }
+
+        missing_jpgs = [
+            self._expected_jpg_path(tt_path)
+            for tt_path in tract_paths
+            if not self._expected_jpg_path(tt_path).exists()
+            or self._expected_jpg_path(tt_path).stat().st_size == 0
+        ]
+        if not missing_jpgs:
+            return {
+                'attempted': False,
+                'success': True,
+                'message': 'All expected JPG previews already exist.'
+            }
+
+        helper_script = Path(__file__).with_name('generate_jpgs_from_tt.py')
+        if not helper_script.exists():
+            return {
+                'attempted': False,
+                'success': False,
+                'message': f'JPG helper script not found: {helper_script}'
+            }
+
+        cmd = [
+            sys.executable,
+            str(helper_script),
+            str(output_prefix.parent),
+            '--dsi-studio',
+            self.dsi_studio_cmd,
+            '--jobs',
+            '1',
+            '--quiet',
+        ]
+
+        if sys.platform.startswith('linux') and os.environ.get('DISPLAY') is None and shutil.which('xvfb-run'):
+            cmd.append('--xvfb')
+
+        try:
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=900,
+                env=_sanitize_dsi_environment(),
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                'attempted': True,
+                'success': False,
+                'command': ' '.join(cmd),
+                'message': 'Timed out while generating fallback JPG previews.'
+            }
+        except Exception as exc:
+            return {
+                'attempted': True,
+                'success': False,
+                'command': ' '.join(cmd),
+                'message': f'Failed to launch JPG recovery: {exc}'
+            }
+
+        remaining_missing = [
+            str(jpg_path)
+            for jpg_path in missing_jpgs
+            if not Path(jpg_path).exists() or Path(jpg_path).stat().st_size == 0
+        ]
+        success = process.returncode == 0 and not remaining_missing
+        output_text = (process.stdout or '').strip()
+        error_text = (process.stderr or '').strip()
+        message_parts = []
+        if output_text:
+            message_parts.append(output_text[-500:])
+        if error_text:
+            message_parts.append(error_text[-500:])
+        if remaining_missing:
+            message_parts.append('Missing JPGs: ' + ', '.join(remaining_missing))
+
+        return {
+            'attempted': True,
+            'success': success,
+            'command': ' '.join(cmd),
+            'message': ' | '.join(message_parts) if message_parts else 'JPG recovery finished without additional output.'
+        }
+
+    def _is_recoverable_figure_export_failure(
+        self,
+        return_code: int,
+        stdout_text: str,
+        stderr_text: str,
+        output_prefix: Optional[Path],
+    ) -> bool:
+        """Return True when DSI Studio crashed after writing tract outputs but before saving screenshots."""
+        if return_code == 0 or not self._collect_tract_outputs(output_prefix):
+            return False
+
+        combined = f"{stdout_text}\n{stderr_text}".lower()
+        return (
+            'create tract figures' in combined
+            and 'qwidget: cannot create a qwidget without qapplication' in combined
+        )
+
+    def _extract_failure_snippet(
+        self,
+        stdout_text: str,
+        stderr_text: str,
+        max_lines: int = 12,
+        max_chars: int = 1200,
+    ) -> str:
+        """Return the most relevant DSI Studio failure lines for logging."""
+        combined = []
+        if stdout_text:
+            combined.extend(("STDOUT", line) for line in stdout_text.splitlines())
+        if stderr_text:
+            combined.extend(("STDERR", line) for line in stderr_text.splitlines())
+
+        if not combined:
+            return "(no DSI Studio output captured)"
+
+        keywords = (
+            'create tract figures',
+            'qwidget',
+            'qapplication',
+            'qt.qpa',
+            'cannot save',
+            'abort',
+            'aborted',
+            'segmentation fault',
+            'core dumped',
+        )
+        match_indexes = [
+            idx for idx, (_, line) in enumerate(combined)
+            if any(keyword in line.lower() for keyword in keywords)
+        ]
+
+        if match_indexes:
+            first = max(0, match_indexes[0] - 2)
+            last = min(len(combined), match_indexes[-1] + 3)
+            snippet_lines = [f"{stream}: {line}" for stream, line in combined[first:last]]
+        else:
+            snippet_lines = [f"{stream}: {line}" for stream, line in combined[-max_lines:]]
+
+        snippet = "\n".join(snippet_lines)
+        if len(snippet) > max_chars:
+            snippet = snippet[-max_chars:]
+        return snippet
+
+    def _command_uses_xvfb(self, cmd: Sequence[str]) -> bool:
+        """Return True when the command is already wrapped in xvfb-run."""
+        return any(Path(part).name == 'xvfb-run' for part in cmd)
+
+    def _log_qt_failure_diagnosis(
+        self,
+        cmd: Sequence[str],
+        return_code: int,
+        stdout_text: str,
+        stderr_text: str,
+    ) -> None:
+        """Log actionable Qt/headless diagnostics for failed DSI Studio runs."""
+        snippet = self._extract_failure_snippet(stdout_text, stderr_text)
+        self.logger.error("\n" + "!" * 80)
+        self.logger.error("DSI STUDIO QT/FIGURE EXPORT FAILURE DETECTED")
+        self.logger.error("!" * 80)
+        self.logger.error(f"Return code: {return_code}")
+        self.logger.error("Relevant DSI Studio output:")
+        for line in snippet.splitlines():
+            self.logger.error(f"  {line}")
+
+        if self._command_uses_xvfb(cmd):
+            self.logger.error(
+                "DSI Studio was already running under xvfb-run, so this is not a missing-display setup issue."
+            )
+            self.logger.error(
+                "The failure is consistent with DSI Studio crashing inside its Qt-based tract figure export path."
+            )
+        else:
+            self.logger.error("DSI Studio was not wrapped in xvfb-run for this failed command.")
+            self.logger.error("If this is a headless Linux host, install xvfb and rerun with:")
+            self.logger.error(f"  xvfb-run -a {' '.join(cmd)}")
+
+        self.logger.error("!" * 80 + "\n")
         
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from JSON file"""
@@ -345,6 +573,7 @@ class ConnectometryBatchAnalysis:
         try:
             # Build command
             cmd = self._build_command(analysis_name, params)
+            output_prefix = self._extract_output_prefix(cmd)
             result['command'] = ' '.join(cmd)
             
             self.logger.info(f"\n{'='*80}")
@@ -378,13 +607,14 @@ class ConnectometryBatchAnalysis:
             result['return_code'] = process.returncode
             result['stdout'] = process.stdout
             result['stderr'] = process.stderr
+            stdout_text = result['stdout'] or ""
+            stderr_text = result['stderr'] or ""
             
             if process.returncode == 0:
                 # Check for DSI Studio specific error messages in stdout even if return code is 0.
                 # Some "❌ cannot save ...jpg" messages are non-fatal (figure export only) and
                 # should not cause the whole analysis to be marked as failed.
 
-                stdout_text = result['stdout'] or ""
                 stdout_lower = stdout_text.lower()
 
                 # Lines that contain the red-cross marker
@@ -430,46 +660,71 @@ class ConnectometryBatchAnalysis:
                 else:
                     result['status'] = 'success'
                     self.logger.info(f"✓ Analysis completed successfully in {result['duration']:.2f}s")
-                    
-                    # Parse results for significance
                     try:
-                        # Extract output prefix from command
-                        output_arg = next((arg for arg in cmd if arg.startswith('--output=')), None)
-                        if output_arg:
-                            output_prefix = output_arg.split('=', 1)[1]
-                            
-                            # Check for positive/increased findings
-                            inc_track = Path(f"{output_prefix}.inc.tt.gz")
-                            if inc_track.exists() and inc_track.stat().st_size > 1000: # Check if file is not empty/trivial
-                                result['findings_increased'] = True
-                                self.logger.info("  -> Found INCREASED connectivity findings")
-                            else:
-                                result['findings_increased'] = False
-                                
-                            # Check for negative/decreased findings
-                            dec_track = Path(f"{output_prefix}.dec.tt.gz")
-                            if dec_track.exists() and dec_track.stat().st_size > 1000:
-                                result['findings_decreased'] = True
-                                self.logger.info("  -> Found DECREASED connectivity findings")
-                            else:
-                                result['findings_decreased'] = False
+                        self._populate_findings(result, output_prefix)
                     except Exception as e:
                         self.logger.warning(f"Failed to parse results: {e}")
+
+                    jpg_result = self._recover_missing_jpgs(output_prefix)
+                    result['jpg_generation'] = jpg_result
+                    if jpg_result['attempted']:
+                        if jpg_result['success']:
+                            self.logger.info("  -> Recovered missing JPG previews after connectometry run")
+                        else:
+                            result['status'] = 'failed'
+                            self.logger.error("✗ Analysis completed but JPG recovery failed")
+                            self.logger.error(jpg_result['message'])
                     
             else:
-                result['status'] = 'failed'
-                self.logger.error(f"✗ Analysis failed with return code {process.returncode}")
-                self.logger.error(f"STDERR: {process.stderr}")
+                if self._is_recoverable_figure_export_failure(
+                    process.returncode,
+                    stdout_text,
+                    stderr_text,
+                    output_prefix,
+                ):
+                    self.logger.warning(
+                        "DSI Studio crashed during built-in tract figure export after writing tract outputs; "
+                        "attempting JPG recovery."
+                    )
+                    self.logger.warning("Relevant DSI Studio output:")
+                    for line in self._extract_failure_snippet(stdout_text, stderr_text).splitlines():
+                        self.logger.warning(f"  {line}")
+                    jpg_result = self._recover_missing_jpgs(output_prefix)
+                    result['jpg_generation'] = jpg_result
+
+                    if jpg_result['success']:
+                        result['status'] = 'success'
+                        result['recovered_after_figure_export_crash'] = True
+                        self.logger.warning(
+                            f"Recovered analysis outputs despite DSI Studio returning {process.returncode}"
+                        )
+                        try:
+                            self._populate_findings(result, output_prefix)
+                        except Exception as e:
+                            self.logger.warning(f"Failed to parse recovered results: {e}")
+                    else:
+                        result['status'] = 'failed'
+                        self.logger.error(f"✗ Analysis failed with return code {process.returncode}")
+                        self.logger.error(jpg_result['message'])
+                else:
+                    result['status'] = 'failed'
+                    self.logger.error(f"✗ Analysis failed with return code {process.returncode}")
+                    self.logger.error(f"STDERR: {process.stderr}")
                 
-                # Check for headless/Qt error
-                if "qt.qpa" in process.stderr or process.returncode == -6 or process.returncode == 134:
-                    self.logger.error("\n" + "!"*80)
-                    self.logger.error("HEADLESS SERVER ERROR DETECTED")
-                    self.logger.error("!"*80)
-                    self.logger.error("DSI Studio 'cnt' action requires a display or xvfb.")
-                    self.logger.error("Please ask your administrator to install 'xvfb' and run:")
-                    self.logger.error(f"  xvfb-run -a {result['command']}")
-                    self.logger.error("!"*80 + "\n")
+                # Check for headless/Qt error only if the run is still failed after recovery.
+                if result['status'] != 'success' and (
+                    "qt.qpa" in stderr_text.lower()
+                    or "qwidget: cannot create a qwidget without qapplication" in stdout_text.lower()
+                    or "qwidget: cannot create a qwidget without qapplication" in stderr_text.lower()
+                    or process.returncode == -6
+                    or process.returncode == 134
+                ):
+                    self._log_qt_failure_diagnosis(
+                        cmd=cmd,
+                        return_code=process.returncode,
+                        stdout_text=stdout_text,
+                        stderr_text=stderr_text,
+                    )
             
         except subprocess.TimeoutExpired:
             result['status'] = 'timeout'
