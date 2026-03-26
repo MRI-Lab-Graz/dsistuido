@@ -89,6 +89,7 @@ class DSIStudioPipeline:
         self.require_mask = args.require_mask
         self.require_t1w = args.require_t1w
         self.skip_existing = args.skip_existing
+        self.session_filter = f"ses-{args.session}" if args.session else None
         self.force_arg = args.force
         # Parse force argument: can be 'database', 'diffs', 'src', 'fib', 'all', or None
         self.force_components = set()
@@ -405,8 +406,12 @@ class DSIStudioPipeline:
 
     def find_qsiprep_files(self):
         """Find and validate preprocessed DWI files in qsiprep directory"""
-        all_dwi = list(self.qsiprep_dir.glob("sub-*/dwi/*_desc-preproc_dwi.nii.gz"))
-        all_dwi += list(self.qsiprep_dir.glob("sub-*/ses-*/dwi/*_desc-preproc_dwi.nii.gz"))
+        if self.session_filter:
+            all_dwi = list(self.qsiprep_dir.glob(f"sub-*/{self.session_filter}/dwi/*_desc-preproc_dwi.nii.gz"))
+            self.logger.info(f"Session filter active: only processing {self.session_filter} ({len(all_dwi)} files found)")
+        else:
+            all_dwi = list(self.qsiprep_dir.glob("sub-*/dwi/*_desc-preproc_dwi.nii.gz"))
+            all_dwi += list(self.qsiprep_dir.glob("sub-*/ses-*/dwi/*_desc-preproc_dwi.nii.gz"))
         if not all_dwi:
             all_dwi = list(self.qsiprep_dir.glob("*_desc-preproc_dwi.nii.gz"))
             
@@ -486,11 +491,15 @@ class DSIStudioPipeline:
             f"--source={dwi_file}",
             f"--bval={bval_file}",
             f"--bvec={bvec_file}",
-            f"--output={output_src}"
+            f"--output={output_src}",
+            "--check_btable=1"
         ]
 
         # Try to find T1w image in anat directory
-        anat_dir = dwi_file.parents[1] / "anat"
+        # qsiprep stores T1w at subject level (not session-specific)
+        subject_anat_dir = self.qsiprep_dir / subject_id / "anat"
+        session_anat_dir = dwi_file.parents[1] / "anat"
+        anat_dir = subject_anat_dir if subject_anat_dir.exists() else session_anat_dir
         t1w_files = list(anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz"))
         if t1w_files:
             cmd.append(f"--t1w={t1w_files[0]}")
@@ -1050,6 +1059,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip_existing", action="store_true", help="Skip subjects if SRC/FIB already exist")
     parser.add_argument("--force", nargs='?', const='all', help="Force overwrite: 'database' (only db), 'diffs', 'src', 'fib', 'all' (default: all)")
     parser.add_argument("--min_file_age", type=int, default=300, help="Minimum file age in seconds (default: 300s/5min) to avoid processing files still being written")
+    parser.add_argument("--session", help="Only process a specific session (e.g., --session 1 for ses-1)")
     parser.add_argument("--pilot", action="store_true", help="Process only one randomly chosen subject")
     parser.add_argument("--dry_run", action="store_true", help="Show commands without running them")
     parser.add_argument("--run_connectivity", action="store_true", help="Run connectivity extraction after FIB generation")
