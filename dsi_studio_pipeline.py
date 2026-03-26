@@ -467,7 +467,7 @@ class DSIStudioPipeline:
         return valid_dwi
 
     def generate_src(self, dwi_file: Path):
-        """Generate SRC file from DWI, bval, and bvec, including T1w if available"""
+        """Generate SRC file from preprocessed DWI with explicit bval/bvec"""
         subject_id = dwi_file.name.split('_')[0]
         # Handle session if present
         session_id = ""
@@ -475,54 +475,45 @@ class DSIStudioPipeline:
             session_id = "_" + dwi_file.name.split('_')[1]
         
         base_id = f"{subject_id}{session_id}"
-        
+        output_src = self.src_dir / f"{base_id}.src.gz"
+
         bval_file = dwi_file.with_suffix('').with_suffix('').with_suffix('.bval')
         bvec_file = dwi_file.with_suffix('').with_suffix('').with_suffix('.bvec')
-        
+
         if not bval_file.exists() or not bvec_file.exists():
             self.logger.warning(f"Missing bval/bvec for {dwi_file.name}, skipping.")
             return None
 
-        output_src = self.src_dir / f"{base_id}.src.gz"
-        
-        cmd = [
-            self.dsi_studio_cmd,
-            "--action=src",
-            f"--source={dwi_file}",
-            f"--bval={bval_file}",
-            f"--bvec={bvec_file}",
-            f"--output={output_src}",
-            "--check_btable=1"
-        ]
-
-        # Try to find T1w image in anat directory
-        # qsiprep stores T1w at subject level (not session-specific)
+        # Check T1w for --require_t1w (still done via anat dir)
         subject_anat_dir = self.qsiprep_dir / subject_id / "anat"
         session_anat_dir = dwi_file.parents[1] / "anat"
         anat_dir = subject_anat_dir if subject_anat_dir.exists() else session_anat_dir
         t1w_files = list(anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz"))
-        if t1w_files:
-            cmd.append(f"--t1w={t1w_files[0]}")
-            self.logger.info(f"Found T1w for {base_id}: {t1w_files[0].name}")
 
-        # Try to find mask
+        # Check mask for --require_mask
         mask_files = list(dwi_file.parent.glob(f"{base_id}*_desc-brain_mask.nii.gz"))
-        if mask_files:
-            cmd.append(f"--mask={mask_files[0]}")
-            self.logger.info(f"Found mask for {base_id}: {mask_files[0].name}")
-        elif self.require_mask:
+        if not mask_files and self.require_mask:
             self.logger.warning(f"Missing mask for {base_id}; skipping due to --require-mask")
             return None
-
-        if self.require_t1w and not t1w_files:
+        if not t1w_files and self.require_t1w:
             self.logger.warning(f"Missing T1w for {base_id}; skipping due to --require-t1w")
             return None
-        
+
         if output_src.exists() and self.skip_existing and not self._should_force('src'):
             self.logger.info(f"SRC exists, skipping generation: {output_src.name}")
             return output_src
         elif output_src.exists() and self._should_force('src'):
             self.logger.info(f"SRC exists but --force src is set, will overwrite: {output_src.name}")
+
+        # New DSI Studio versions auto-detect bval/bvec from the source directory;
+        # --bval/--bvec are no longer recognized parameters.
+        cmd = [
+            self.dsi_studio_cmd,
+            "--action=src",
+            f"--source={dwi_file}",
+            f"--output={output_src}",
+            "--overwrite=1"
+        ]
 
         if self.run_command(cmd):
             # DSI Studio may create .src.gz.sz instead of .src.gz
@@ -576,7 +567,8 @@ class DSIStudioPipeline:
             f"--method={self.method}",
             f"--param0={self.param0}",
             f"--thread_count={self.threads}",
-            "--other_output=all"
+            "--other_output=all",
+            "--check_btable=1"
         ]
         
         if self.run_command(cmd):
@@ -899,9 +891,12 @@ class DSIStudioPipeline:
             src = self.generate_src(dwi)
             if src:
                 session_info['src_file'] = src.name
-                # Validate SRC
-                if src.exists() and src.stat().st_size > 0:
+                # Validate SRC — must be a file (not a directory) with non-zero size
+                if src.is_file() and src.stat().st_size > 0:
                     self.logger.info(f"✓ SRC validated: {src.name} ({src.stat().st_size / (1024*1024):.1f} MB)")
+                elif src.is_dir():
+                    self.logger.error(f"SRC path is a directory, not a file: {src} — likely a DSI Studio output naming issue")
+                    src = None
                 
                 fib = self.reconstruct_fib(src)
                 if fib:
@@ -1046,7 +1041,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DSI Studio Preprocessing Pipeline")
     parser.add_argument("--qsiprep_dir", required=True, help="Path to qsiprep output directory")
     parser.add_argument("--output_dir", required=True, help="Path to output directory")
-    parser.add_argument("--dsi_studio_cmd", default="/data/local/software/dsi-studio/dsi_studio", help="Path to dsi_studio executable")
+    parser.add_argument("--dsi_studio_cmd", default="/data/local/software/dsi-studio-mar2026/dsi_studio", help="Path to dsi_studio executable")
     parser.add_argument("--dsi_studio_path", help="Path to DSI Studio installation folder (containing dsi_studio executable)")
     parser.add_argument("--method", default="4", help="Reconstruction method (4=GQI, 7=QSDR)")
     parser.add_argument("--param0", default="1.25", help="Diffusion sampling length ratio")
