@@ -30,19 +30,24 @@ def _sanitize_dsi_environment() -> Dict[str, str]:
 
     Removes legacy MATLAB MCR paths from LD_LIBRARY_PATH to avoid Qt/libstdc++
     conflicts that can break DSI Studio startup or figure export.
+    Sets GALLIUM_DRIVER=softpipe to avoid Mesa llvmpipe segfaults during
+    OpenGL figure rendering under Xvfb (required for Mar 2026+ builds).
     """
     env = os.environ.copy()
     ld_lib = env.get('LD_LIBRARY_PATH', '')
-    if not ld_lib:
-        return env
+    if ld_lib:
+        parts = [p for p in ld_lib.split(':') if p]
+        filtered = [p for p in parts if 'conn_standalone/MCR' not in p and '/MCR/' not in p]
+        if filtered:
+            env['LD_LIBRARY_PATH'] = ':'.join(filtered)
+        else:
+            env.pop('LD_LIBRARY_PATH', None)
 
-    parts = [p for p in ld_lib.split(':') if p]
-    filtered = [p for p in parts if 'conn_standalone/MCR' not in p and '/MCR/' not in p]
+    # Xvfb uses Mesa software rendering; llvmpipe segfaults in DSI Studio Mar 2026+
+    # builds during OpenGL figure generation. softpipe is stable.
+    if sys.platform.startswith('linux') and os.environ.get('DISPLAY') is None:
+        env.setdefault('GALLIUM_DRIVER', 'softpipe')
 
-    if filtered:
-        env['LD_LIBRARY_PATH'] = ':'.join(filtered)
-    else:
-        env.pop('LD_LIBRARY_PATH', None)
     return env
 
 # Force Qt to use minimal platform for headless execution
@@ -378,7 +383,8 @@ class ConnectometryBatchAnalysis:
         if sys.platform.startswith('linux') and os.environ.get('DISPLAY') is None:
             xvfb_path = shutil.which('xvfb-run')
             if xvfb_path:
-                cmd.extend([xvfb_path, '-a'])
+                cmd.extend([xvfb_path, '-a',
+                             '--server-args=-screen 0 1920x1080x24 +render -dpi 96'])
         
         cmd.extend([self.dsi_studio_cmd, '--action=cnt'])
         

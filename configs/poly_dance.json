@@ -125,7 +125,8 @@
         4,
         8,
         16
-      ]
+      ],
+      "value": 8
     },
     "exclude_cb": {
       "description": "Exclude cerebellum from analysis (1=yes, 0=no)",
@@ -178,7 +179,7 @@
         0,
         1
       ],
-      "value": 1
+      "value": 0
     }
   },
   "optional_parameters": {
@@ -222,7 +223,7 @@
         "index_name": ["qa", "dti_fa", "md", "ad", "rd", "iso", "gfa", "rdi", "od", "isovf", "icvf"],
         "effect_size": "0.20:0.02:0.30",
         "length_threshold": "20:2:30",
-        "permutation": 5000,
+        "permutation": 10000,
         "fdr_threshold": 0.05
       }
     },

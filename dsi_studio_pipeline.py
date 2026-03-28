@@ -1041,7 +1041,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DSI Studio Preprocessing Pipeline")
     parser.add_argument("--qsiprep_dir", required=True, help="Path to qsiprep output directory")
     parser.add_argument("--output_dir", required=True, help="Path to output directory")
-    parser.add_argument("--dsi_studio_cmd", default="/data/local/software/dsi-studio-mar2026/dsi_studio", help="Path to dsi_studio executable")
+    parser.add_argument("--dsi_studio_cmd", default="/data/local/software/dsi-studio/dsi_studio", help="Path to dsi_studio executable")
     parser.add_argument("--dsi_studio_path", help="Path to DSI Studio installation folder (containing dsi_studio executable)")
     parser.add_argument("--method", default="4", help="Reconstruction method (4=GQI, 7=QSDR)")
     parser.add_argument("--param0", default="1.25", help="Diffusion sampling length ratio")
