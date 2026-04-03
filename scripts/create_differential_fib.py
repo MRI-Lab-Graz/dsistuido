@@ -26,7 +26,7 @@ def create_diff_fib(baseline_path, followup_path, output_path, method=4):
     WARNING: This approach may not work correctly with DSI Studio's binary FIB format.
     DSI Studio FIB (.fz) files are in a custom binary format, not standard MATLAB .mat files.
     This script attempts to treat them as MATLAB files, which may fail silently.
-    ""
+    """
     try:
         print(f"Loading baseline: {baseline_path}")
         with gzip.open(baseline_path, 'rb') as f:

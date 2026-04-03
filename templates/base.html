@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}DSI Studio Console{% endblock %}</title>
+    <link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet"></noscript>
+    <link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet"></noscript>
+    <style>
+        body {
+            background: #f4f6f9;
+            color: #1f2d3d;
+        }
+        .app-shell {
+            min-height: calc(100vh - 64px);
+        }
+        .navbar-brand {
+            font-weight: 700;
+        }
+        .brand-logo {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            background: #fff;
+            border: 1px solid #d8dee6;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #1f8b5c;
+            box-shadow: 0 0 6px rgba(0, 0, 0, 0.08);
+        }
+        .feature-card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+        }
+        .sidebar-card {
+            border: 1px solid #e3e8ef;
+            border-radius: 12px;
+            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+            background: #fff;
+        }
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            padding: 0.55rem 0.7rem;
+            border-radius: 8px;
+            color: #2d3a4a;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.92rem;
+        }
+        .sidebar-link:hover {
+            background: #f5f8fc;
+            color: #1f8b5c;
+        }
+        .sidebar-link.active {
+            background: #e9f7f0;
+            color: #1f8b5c;
+        }
+        .feature-card .card-header {
+            background: #f8f9fa;
+            border-bottom: 1px solid #e5e9ef;
+            font-weight: 600;
+        }
+        .path-help {
+            font-size: 0.8rem;
+            color: #6c757d;
+        }
+        .job-pill {
+            border-radius: 999px;
+            font-size: 0.75rem;
+            padding: 0.2rem 0.55rem;
+            font-weight: 600;
+        }
+        .job-running { background: #fff3cd; color: #664d03; }
+        .job-completed { background: #d1e7dd; color: #0f5132; }
+        .job-failed { background: #f8d7da; color: #842029; }
+        .jobs-panel {
+            border-top: 1px solid #dde3ea;
+            background: #ffffff;
+        }
+        .picker-entry {
+            cursor: pointer;
+        }
+        .picker-entry:hover {
+            background: #f8fafc;
+        }
+        .navbar .nav-link.active {
+            font-weight: 700;
+            color: #1f8b5c !important;
+        }
+        .project-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.25rem 0.55rem;
+            border-radius: 999px;
+            font-size: 0.77rem;
+            font-weight: 700;
+            background: #fff3cd;
+            color: #664d03;
+        }
+        .project-path {
+            font-size: 0.78rem;
+            color: #6c757d;
+            word-break: break-all;
+        }
+        .project-summary {
+            border: 1px solid #dfe6ee;
+            border-radius: 12px;
+            background: #ffffff;
+            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05);
+            padding: 0.75rem 0.9rem;
+        }
+        .project-summary-title {
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: #334155;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .summary-chip {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            background: #eff4fb;
+            color: #334155;
+            padding: 0.2rem 0.55rem;
+            font-size: 0.73rem;
+            font-weight: 700;
+            margin-right: 0.35rem;
+            margin-bottom: 0.35rem;
+        }
+        .summary-item {
+            font-size: 0.8rem;
+            color: #475569;
+            margin-bottom: 0.2rem;
+            word-break: break-all;
+        }
+        .summary-item span {
+            font-weight: 700;
+            color: #1f2937;
+            margin-right: 0.35rem;
+        }
+    </style>
+    {% block styles %}{% endblock %}
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-light bg-white border-bottom shadow-sm">
+    <div class="container-xxl">
+        <a class="navbar-brand d-flex align-items-center" href="{{ url_for('projects_page') }}">
+            <span class="brand-logo me-2"><i class="fas fa-brain"></i></span>
+            <span>
+                MRI-Lab Graz
+                <small class="d-block text-muted" style="font-size: 0.72rem; letter-spacing: 0.04em;">DSI Studio Console</small>
+            </span>
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <div class="navbar-text me-3 d-none d-lg-block" id="currentProjectBadgeTop" style="display:none;">
+                <span class="project-pill" id="currentProjectNameTop"><i class="fas fa-folder-open"></i><span id="currentProjectNameTopText">Project</span></span>
+            </div>
+            <ul class="navbar-nav ms-auto">
+                <li class="nav-item"><a class="nav-link{% if active_page == 'projects' %} active{% endif %}" href="{{ url_for('projects_page') }}"><i class="fas fa-folder-open me-1 text-primary"></i>New Project</a></li>
+                <li class="nav-item"><a class="nav-link{% if active_page == 'pipeline' %} active{% endif %}" href="{{ url_for('pipeline_page') }}"><i class="fas fa-diagram-project me-1 text-success"></i>Pipeline</a></li>
+                <li class="nav-item"><a class="nav-link{% if active_page == 'connectometry' %} active{% endif %}" href="{{ url_for('connectometry_page') }}"><i class="fas fa-chart-line me-1 text-warning"></i>Connectometry</a></li>
+                <li class="nav-item"><a class="nav-link{% if active_page == 'viewer' %} active{% endif %}" href="{{ url_for('viewer_page') }}"><i class="fas fa-image me-1 text-info"></i>Interactive Viewer</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<main class="container-xxl my-4 app-shell">
+    <div class="row g-4">
+        <aside class="col-xl-3 col-lg-4">
+            <div class="sidebar-card p-3 mb-3">
+                <div class="d-flex align-items-center mb-2">
+                    <i class="fas fa-compass text-primary me-2"></i>
+                    <strong>Workspace</strong>
+                </div>
+                <div class="small text-muted mb-3">Navigate one workflow step at a time.</div>
+                <nav class="d-grid gap-1">
+                    <a class="sidebar-link{% if active_page == 'projects' %} active{% endif %}" href="{{ url_for('projects_page') }}"><i class="fas fa-folder-plus text-primary"></i>New Project</a>
+                    <a class="sidebar-link{% if active_page == 'pipeline' %} active{% endif %}" href="{{ url_for('pipeline_page') }}"><i class="fas fa-diagram-project text-success"></i>Pipeline</a>
+                    <a class="sidebar-link{% if active_page == 'connectometry' %} active{% endif %}" href="{{ url_for('connectometry_page') }}"><i class="fas fa-chart-line text-warning"></i>Connectometry</a>
+                    <a class="sidebar-link{% if active_page == 'viewer' %} active{% endif %}" href="{{ url_for('viewer_page') }}"><i class="fas fa-image text-info"></i>Interactive Viewer</a>
+                </nav>
+            </div>
+
+            <div class="sidebar-card p-3">
+                <div class="d-flex align-items-center mb-2">
+                    <i class="fas fa-folder-open text-warning me-2"></i>
+                    <strong>Current Project</strong>
+                </div>
+                <div id="currentProjectBadgeSide" style="display:none;">
+                    <div class="project-pill" id="currentProjectNameSide"><i class="fas fa-folder-open"></i><span id="currentProjectNameSideText">Project</span></div>
+                    <div class="project-path mt-2" id="currentProjectPathSide"></div>
+                </div>
+                <div id="currentProjectEmpty" class="small text-muted">No project profile loaded yet. Start on New Project page.</div>
+            </div>
+        </aside>
+
+        <section class="col-xl-9 col-lg-8">
+            <div class="project-summary mb-3" id="projectSummaryPanel" style="display:none;">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div class="project-summary-title"><i class="fas fa-layer-group text-primary me-2"></i>Project Snapshot</div>
+                    <div>
+                        <span class="summary-chip" id="summaryChipName"><i class="fas fa-folder-open me-1"></i><span id="summaryChipNameText">Project</span></span>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <div class="summary-item" id="summaryRootRow"><span>Root</span><code id="summaryRoot">-</code></div>
+                    <div class="summary-item" id="summaryQsiRow"><span>QSIPrep</span><code id="summaryQsi">-</code></div>
+                    <div class="summary-item" id="summaryOutRow"><span>Output</span><code id="summaryOut">-</code></div>
+                    <div class="summary-item" id="summaryConnRow"><span>Connectivity</span><code id="summaryConn">-</code></div>
+                </div>
+            </div>
+            {% block content %}{% endblock %}
+        </section>
+    </div>
+</main>
+
+<div class="jobs-panel py-3">
+    <div class="container-xxl">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="mb-0"><i class="fas fa-terminal me-2 text-secondary"></i>Backend Jobs</h6>
+            <button class="btn btn-sm btn-outline-secondary" type="button" id="refreshJobsBtn">Refresh</button>
+        </div>
+        <div id="jobsPanel" class="small text-muted">No jobs yet.</div>
+    </div>
+</div>
+
+<div class="modal fade" id="pathPickerModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-folder-tree me-2 text-primary"></i>Select Path</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group mb-2">
+                    <button class="btn btn-outline-secondary" type="button" id="pickerUpBtn" title="Parent"><i class="fas fa-arrow-up"></i></button>
+                    <input class="form-control" id="pickerPathInput" placeholder="/path/to/location" />
+                    <button class="btn btn-outline-secondary" type="button" id="pickerGoBtn">Go</button>
+                </div>
+                <div class="mb-2" id="pickerRoots"></div>
+                <div class="table-responsive border rounded">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr><th>Name</th><th style="width: 180px;">Type</th><th style="width: 130px;">Action</th></tr>
+                        </thead>
+                        <tbody id="pickerEntriesBody"></tbody>
+                    </table>
+                </div>
+                <div id="pickerError" class="text-danger small mt-2 d-none"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" type="button" id="pickerUseCurrentBtn">Use current path</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function() {
+    const jobsPanel = document.getElementById('jobsPanel');
+    const refreshJobsBtn = document.getElementById('refreshJobsBtn');
+    const PROJECT_KEY = 'dsi_web_current_project';
+
+    async function fetchJson(url, payload, method = 'POST') {
+        const opts = { method, headers: { 'Content-Type': 'application/json' } };
+        if (payload !== undefined && method !== 'GET') {
+            opts.body = JSON.stringify(payload);
+        }
+        const response = await fetch(url, opts);
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || 'Request failed');
+        }
+        return data;
+    }
+
+    function notify(message, isError = false) {
+        if (jobsPanel) {
+            jobsPanel.innerHTML = '';
+            const span = document.createElement('span');
+            span.className = isError ? 'text-danger' : 'text-success';
+            span.textContent = message;
+            jobsPanel.appendChild(span);
+        }
+    }
+
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function getCurrentProject() {
+        const raw = localStorage.getItem(PROJECT_KEY);
+        if (!raw) return null;
+        try {
+            return JSON.parse(raw);
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function setCurrentProject(project) {
+        localStorage.setItem(PROJECT_KEY, JSON.stringify(project || {}));
+        updateCurrentProjectUI();
+    }
+
+    function updateCurrentProjectUI() {
+        const project = getCurrentProject();
+        const name = (project && (project.name || (project.project_root || '').split(/[\\/]/).pop())) || '';
+        const path = (project && (project.project_root || project.output_dir || project.qsiprep_dir || '')) || '';
+
+        const top = document.getElementById('currentProjectBadgeTop');
+        const topNameText = document.getElementById('currentProjectNameTopText');
+        const side = document.getElementById('currentProjectBadgeSide');
+        const sideNameText = document.getElementById('currentProjectNameSideText');
+        const sidePath = document.getElementById('currentProjectPathSide');
+        const empty = document.getElementById('currentProjectEmpty');
+
+        const summary = document.getElementById('projectSummaryPanel');
+        const summaryChipNameText = document.getElementById('summaryChipNameText');
+        const summaryRoot = document.getElementById('summaryRoot');
+        const summaryQsi = document.getElementById('summaryQsi');
+        const summaryOut = document.getElementById('summaryOut');
+        const summaryConn = document.getElementById('summaryConn');
+        const summaryRootRow = document.getElementById('summaryRootRow');
+        const summaryQsiRow = document.getElementById('summaryQsiRow');
+        const summaryOutRow = document.getElementById('summaryOutRow');
+        const summaryConnRow = document.getElementById('summaryConnRow');
+
+        if (name || path) {
+            if (top) top.style.display = '';
+            if (topNameText) topNameText.textContent = name || 'Project';
+            if (side) side.style.display = '';
+            if (sideNameText) sideNameText.textContent = name || 'Project';
+            if (sidePath) sidePath.textContent = path || '(path not set)';
+            if (empty) empty.style.display = 'none';
+
+            if (summary) summary.style.display = '';
+            if (summaryChipNameText) summaryChipNameText.textContent = name || 'Project';
+
+            const rootVal = project.project_root || '';
+            const qsiVal = project.qsiprep_dir || '';
+            const outVal = project.output_dir || '';
+            const connVal = project.connectivity_config || '';
+
+            if (summaryRoot) summaryRoot.textContent = rootVal || '-';
+            if (summaryQsi) summaryQsi.textContent = qsiVal || '-';
+            if (summaryOut) summaryOut.textContent = outVal || '-';
+            if (summaryConn) summaryConn.textContent = connVal || '-';
+
+            if (summaryRootRow) summaryRootRow.style.display = rootVal ? '' : 'none';
+            if (summaryQsiRow) summaryQsiRow.style.display = qsiVal ? '' : 'none';
+            if (summaryOutRow) summaryOutRow.style.display = outVal ? '' : 'none';
+            if (summaryConnRow) summaryConnRow.style.display = connVal ? '' : 'none';
+        } else {
+            if (top) top.style.display = 'none';
+            if (side) side.style.display = 'none';
+            if (empty) empty.style.display = '';
+            if (summary) summary.style.display = 'none';
+        }
+    }
+
+    async function refreshJobs() {
+        try {
+            const data = await fetch('/api/jobs');
+            const jobs = await data.json();
+            if (!Array.isArray(jobs) || jobs.length === 0) {
+                jobsPanel.textContent = 'No jobs yet.';
+                return;
+            }
+            const latest = jobs.slice().reverse().slice(0, 10);
+            jobsPanel.innerHTML = latest.map(j => {
+                const statusClass = j.status === 'completed' ? 'job-completed' : (j.status === 'failed' ? 'job-failed' : 'job-running');
+                return `<div class="mb-1"><span class="job-pill ${statusClass}">${escapeHtml(j.status || '')}</span> <strong>${escapeHtml(j.type || '')}</strong> <span class="text-muted">${escapeHtml(j.log_file || '')}</span></div>`;
+            }).join('');
+        } catch (error) {
+            jobsPanel.innerHTML = '';
+            const span = document.createElement('span');
+            span.className = 'text-danger';
+            span.textContent = `Could not load jobs: ${error.message}`;
+            jobsPanel.appendChild(span);
+        }
+    }
+
+    async function savePreset(kind, settings) {
+        const ts = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+        const filename = `${kind}_${ts}.json`;
+        return fetchJson('/api/save_settings', {
+            filename,
+            settings: {
+                kind,
+                ...settings,
+            },
+        });
+    }
+
+    async function listPresets(kind) {
+        const files = await (await fetch('/api/list_settings')).json();
+        return (files || []).filter(x => x.name && x.name.startsWith(kind + '_'));
+    }
+
+    async function readPreset(filename) {
+        return fetchJson('/api/settings/read', { filename });
+    }
+
+    let pickerTargetInput = null;
+    let pickerMode = 'any';
+    let pickerCurrentPath = '';
+    const pickerModalEl = document.getElementById('pathPickerModal');
+    const pickerPathInput = document.getElementById('pickerPathInput');
+    const pickerEntriesBody = document.getElementById('pickerEntriesBody');
+    const pickerError = document.getElementById('pickerError');
+    const pickerRoots = document.getElementById('pickerRoots');
+    const pickerUpBtn = document.getElementById('pickerUpBtn');
+    const pickerGoBtn = document.getElementById('pickerGoBtn');
+    const pickerUseCurrentBtn = document.getElementById('pickerUseCurrentBtn');
+    const pickerModal = window.bootstrap ? new bootstrap.Modal(pickerModalEl) : null;
+
+    function clearPickerError() {
+        pickerError.classList.add('d-none');
+        pickerError.textContent = '';
+    }
+
+    function showPickerError(msg) {
+        pickerError.classList.remove('d-none');
+        pickerError.textContent = msg;
+    }
+
+    function setPickerValue(path) {
+        if (!pickerTargetInput) return;
+        pickerTargetInput.value = path;
+        pickerTargetInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    async function loadPickerEntries(path) {
+        clearPickerError();
+        try {
+            const data = await fetchJson('/api/fs/list', { path, mode: pickerMode });
+            pickerCurrentPath = data.cwd;
+            pickerPathInput.value = data.cwd;
+            const roots = data.roots || [];
+            pickerRoots.innerHTML = roots.map(root => `<button type="button" class="btn btn-sm btn-outline-secondary me-1 mb-1 picker-root-btn" data-path="${escapeHtml(root)}">${escapeHtml(root)}</button>`).join('');
+
+            if (!data.entries || data.entries.length === 0) {
+                pickerEntriesBody.innerHTML = '<tr><td colspan="3" class="text-muted">No entries found.</td></tr>';
+            } else {
+                pickerEntriesBody.innerHTML = data.entries.map(entry => {
+                    const icon = entry.is_dir ? 'fa-folder text-warning' : 'fa-file text-secondary';
+                    const typeLabel = entry.is_dir ? 'Folder' : 'File';
+                    const openBtn = entry.is_dir ? `<button type="button" class="btn btn-sm btn-outline-primary picker-open-btn" data-path="${escapeHtml(entry.path)}">Open</button>` : '';
+                    const canChoose = (pickerMode === 'any') || (pickerMode === 'file' && !entry.is_dir) || (pickerMode === 'dir' && entry.is_dir);
+                    const chooseBtn = canChoose ? `<button type="button" class="btn btn-sm btn-success picker-choose-btn" data-path="${escapeHtml(entry.path)}">Choose</button>` : '<span class="text-muted">-</span>';
+                    return `<tr class="picker-entry"><td><i class="fas ${icon} me-2"></i>${escapeHtml(entry.name)}</td><td>${escapeHtml(typeLabel)}</td><td>${openBtn} ${chooseBtn}</td></tr>`;
+                }).join('');
+            }
+
+            document.querySelectorAll('.picker-root-btn').forEach(btn => {
+                btn.addEventListener('click', () => loadPickerEntries(btn.dataset.path));
+            });
+            document.querySelectorAll('.picker-open-btn').forEach(btn => {
+                btn.addEventListener('click', () => loadPickerEntries(btn.dataset.path));
+            });
+            document.querySelectorAll('.picker-choose-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    setPickerValue(btn.dataset.path);
+                    if (pickerModal) pickerModal.hide();
+                });
+            });
+        } catch (error) {
+            showPickerError(error.message);
+        }
+    }
+
+    function attachPathPickers(root = document) {
+        root.querySelectorAll('.path-picker-group').forEach(group => {
+            if (group.dataset.wired === '1') return;
+            const input = group.querySelector('input');
+            const button = group.querySelector('.open-path-picker');
+            if (!input || !button) return;
+            button.addEventListener('click', () => {
+                pickerTargetInput = input;
+                pickerMode = group.dataset.pickerMode || 'any';
+                const startPath = input.value.trim();
+                loadPickerEntries(startPath);
+                if (pickerModal) {
+                    pickerModal.show();
+                } else {
+                    notify('Path picker requires Bootstrap JS; direct path entry is still available.', true);
+                }
+            });
+            group.dataset.wired = '1';
+        });
+    }
+
+    pickerUpBtn.addEventListener('click', () => loadPickerEntries(pickerPathInput.value.trim() + '/..'));
+    pickerGoBtn.addEventListener('click', () => loadPickerEntries(pickerPathInput.value.trim()));
+    pickerUseCurrentBtn.addEventListener('click', () => {
+        setPickerValue(pickerPathInput.value.trim());
+        if (pickerModal) pickerModal.hide();
+    });
+
+    refreshJobsBtn.addEventListener('click', refreshJobs);
+    refreshJobs();
+    setInterval(refreshJobs, 5000);
+    attachPathPickers(document);
+    updateCurrentProjectUI();
+
+    window.dsiUi = {
+        fetchJson,
+        notify,
+        refreshJobs,
+        savePreset,
+        listPresets,
+        readPreset,
+        attachPathPickers,
+        getCurrentProject,
+        setCurrentProject,
+        updateCurrentProjectUI,
+    };
+})();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

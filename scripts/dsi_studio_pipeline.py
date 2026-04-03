@@ -8,13 +8,13 @@ This script automates the preprocessing steps for DSI Studio starting from qsipr
 3. Connectometry Database creation
 
 Usage:
-    python dsi_studio_pipeline.py --qsiprep_dir /path/to/qsiprep --output_dir ./dsi_studio_output
+    python scripts/dsi_studio_pipeline.py --qsiprep_dir /path/to/qsiprep --output_dir ./dsi_studio_output
     
     # Skip existing files (useful for resuming interrupted runs)
-    python dsi_studio_pipeline.py ... --skip_existing
+    python scripts/dsi_studio_pipeline.py ... --skip_existing
     
     # Force overwrite existing files (useful for regenerating corrupted files)
-    python dsi_studio_pipeline.py ... --skip_existing --force
+    python scripts/dsi_studio_pipeline.py ... --skip_existing --force
 """
 
 import os

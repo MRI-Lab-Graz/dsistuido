@@ -7,7 +7,7 @@
       "description": "Path to the db.fib.gz connectometry database file",
       "type": "file_path",
       "required": true,
-      "value": "/data/local/Poly/poly_dance/All_longitudinal.dz.mod.dz"
+      "value": "/data/local/Poly/poly_dance/analysis/final_long_connectometry.db.fib.gz.dif.dz"
     },
     "index_name": {
       "description": "Diffusion metric to analyze",
@@ -23,14 +23,14 @@
       "description": "Path to demographic CSV or text file with subject variables (leave empty if demographics are embedded in the .dz database)",
       "type": "file_path",
       "required": false,
-      "value": ""
+      "value": "/data/local/Poly/poly_dance/analysis/participants_longitudinal_pilot.tsv"
     },
     "variable_list": {
       "description": "Study variables for regression (comma-separated indices)",
       "type": "string",
       "required": true,
       "example": "0,1,2",
-      "value": "0,1,2"
+      "value": "0,1,2,6,7,8"
     },
     "voi": {
       "description": "Variable of interest for multiple regression (0-indexed) or 'longitudinal'",
@@ -117,16 +117,14 @@
     "thread_count": {
       "description": "Number of threads for computation",
       "type": "int",
-      "default": 8,
+      "default": 4,
       "range": [
-8
+4
       ],
       "values": [
-        4,
-        8,
-        16
+        4
       ],
-      "value": 8
+      "value": 4
     },
     "exclude_cb": {
       "description": "Exclude cerebellum from analysis (1=yes, 0=no)",

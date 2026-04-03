@@ -7,6 +7,7 @@ from PIL import Image
 
 ROOT_DEFAULT = "/Volumes/Thunder/dsi_crea/final_sweep"
 OUTPUT_HTML_NAME = "interactive_viewer.html"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def get_default_root_dir() -> str:
@@ -17,6 +18,7 @@ def get_default_root_dir() -> str:
   """
   candidates = [
     Path.cwd() / "connectometry_results",
+    REPO_ROOT / "connectometry_results",
     Path(__file__).resolve().parent / "connectometry_results",
   ]
   for candidate in candidates:

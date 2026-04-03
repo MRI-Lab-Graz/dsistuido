@@ -8,13 +8,13 @@ This script automates the preprocessing steps for DSI Studio starting from qsipr
 3. Connectometry Database creation
 
 Usage:
-    python dsi_studio_pipeline.py --qsiprep_dir /path/to/qsiprep --output_dir ./dsi_studio_output
+    python scripts/pipeline/dsi_studio_pipeline.py --qsiprep_dir /path/to/qsiprep --output_dir ./dsi_studio_output
     
     # Skip existing files (useful for resuming interrupted runs)
-    python dsi_studio_pipeline.py ... --skip_existing
+    python scripts/pipeline/dsi_studio_pipeline.py ... --skip_existing
     
     # Force overwrite existing files (useful for regenerating corrupted files)
-    python dsi_studio_pipeline.py ... --skip_existing --force
+    python scripts/pipeline/dsi_studio_pipeline.py ... --skip_existing --force
 """
 
 import os
@@ -89,7 +89,6 @@ class DSIStudioPipeline:
         self.require_mask = args.require_mask
         self.require_t1w = args.require_t1w
         self.skip_existing = args.skip_existing
-        self.session_filter = f"ses-{args.session}" if args.session else None
         self.force_arg = args.force
         # Parse force argument: can be 'database', 'diffs', 'src', 'fib', 'all', or None
         self.force_components = set()
@@ -139,6 +138,9 @@ class DSIStudioPipeline:
             "skipped_existing": 0,
             "src_ok": 0,
             "fib_ok": 0,
+            "diff_ok": 0,
+            "diff_failed": 0,
+            "errors": [],
         }
         
         # Track processing details for HTML reports
@@ -280,9 +282,15 @@ class DSIStudioPipeline:
                     outputs.append(candidate)
         return outputs
 
-    def run_command(self, cmd: List[str]):
-        """Run a shell command and log output"""
-        self.logger.info(f"Running: {' '.join(cmd)}")
+    def run_command(self, cmd: List[str], log_command: bool = False):
+        """Run a shell command and log output.
+        
+        Args:
+            cmd: Command to run as list of strings
+            log_command: If True, log the command before running (default False, caller should log instead)
+        """
+        if log_command:
+            self.logger.info(f"Running: {' '.join(cmd)}")
         if self.dry_run:
             return True
         
@@ -351,19 +359,11 @@ class DSIStudioPipeline:
     def print_progress_summary(self, current: int, total: int):
         """Print a formatted progress summary to terminal"""
         percent = (current / total * 100) if total > 0 else 0
-        bar_length = 40
+        bar_length = 20
         filled = int(bar_length * current / total) if total > 0 else 0
         bar = "█" * filled + "░" * (bar_length - filled)
         
-        summary = f"""
-╔══════════════════════════════════════════════════════════════╗
-║ 📊 PIPELINE PROGRESS                                         ║
-╠══════════════════════════════════════════════════════════════╣
-║ Progress: [{bar}] {percent:5.1f}% ({current}/{total})
-║ ✓ Processed: {self.stats["processed"]:>4}  | ✗ Skipped: {self.stats["skipped_existing"]:>4}
-║ ✓ SRC OK: {self.stats["src_ok"]:>6}  | ✓ FIB OK: {self.stats["fib_ok"]:>6}
-╚══════════════════════════════════════════════════════════════╝
-"""
+        summary = f"[{bar}] {percent:5.1f}% ({current}/{total}) | Proc: {self.stats['processed']:>3} | SRC: {self.stats['src_ok']:>3} | FIB: {self.stats['fib_ok']:>3}"
         self.logger.info(summary)
 
     def _parse_sub_ses(self, path: Path) -> Tuple[str, str]:
@@ -406,12 +406,8 @@ class DSIStudioPipeline:
 
     def find_qsiprep_files(self):
         """Find and validate preprocessed DWI files in qsiprep directory"""
-        if self.session_filter:
-            all_dwi = list(self.qsiprep_dir.glob(f"sub-*/{self.session_filter}/dwi/*_desc-preproc_dwi.nii.gz"))
-            self.logger.info(f"Session filter active: only processing {self.session_filter} ({len(all_dwi)} files found)")
-        else:
-            all_dwi = list(self.qsiprep_dir.glob("sub-*/dwi/*_desc-preproc_dwi.nii.gz"))
-            all_dwi += list(self.qsiprep_dir.glob("sub-*/ses-*/dwi/*_desc-preproc_dwi.nii.gz"))
+        all_dwi = list(self.qsiprep_dir.glob("sub-*/dwi/*_desc-preproc_dwi.nii.gz"))
+        all_dwi += list(self.qsiprep_dir.glob("sub-*/ses-*/dwi/*_desc-preproc_dwi.nii.gz"))
         if not all_dwi:
             all_dwi = list(self.qsiprep_dir.glob("*_desc-preproc_dwi.nii.gz"))
             
@@ -467,7 +463,7 @@ class DSIStudioPipeline:
         return valid_dwi
 
     def generate_src(self, dwi_file: Path):
-        """Generate SRC file from preprocessed DWI with explicit bval/bvec"""
+        """Generate SRC file from DWI, bval, and bvec, including T1w if available"""
         subject_id = dwi_file.name.split('_')[0]
         # Handle session if present
         session_id = ""
@@ -475,46 +471,56 @@ class DSIStudioPipeline:
             session_id = "_" + dwi_file.name.split('_')[1]
         
         base_id = f"{subject_id}{session_id}"
-        output_src = self.src_dir / f"{base_id}.src.gz"
-
+        
         bval_file = dwi_file.with_suffix('').with_suffix('').with_suffix('.bval')
         bvec_file = dwi_file.with_suffix('').with_suffix('').with_suffix('.bvec')
-
+        
         if not bval_file.exists() or not bvec_file.exists():
             self.logger.warning(f"Missing bval/bvec for {dwi_file.name}, skipping.")
             return None
 
-        # Check T1w for --require_t1w (still done via anat dir)
-        subject_anat_dir = self.qsiprep_dir / subject_id / "anat"
-        session_anat_dir = dwi_file.parents[1] / "anat"
-        anat_dir = subject_anat_dir if subject_anat_dir.exists() else session_anat_dir
-        t1w_files = list(anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz"))
-
-        # Check mask for --require_mask
-        mask_files = list(dwi_file.parent.glob(f"{base_id}*_desc-brain_mask.nii.gz"))
-        if not mask_files and self.require_mask:
-            self.logger.warning(f"Missing mask for {base_id}; skipping due to --require-mask")
-            return None
-        if not t1w_files and self.require_t1w:
-            self.logger.warning(f"Missing T1w for {base_id}; skipping due to --require-t1w")
-            return None
-
-        if output_src.exists() and self.skip_existing and not self._should_force('src'):
-            self.logger.info(f"SRC exists, skipping generation: {output_src.name}")
-            return output_src
-        elif output_src.exists() and self._should_force('src'):
-            self.logger.info(f"SRC exists but --force src is set, will overwrite: {output_src.name}")
-
-        # New DSI Studio versions auto-detect bval/bvec from the source directory;
-        # --bval/--bvec are no longer recognized parameters.
+        output_src = self.src_dir / f"{base_id}.src.gz"
+        
         cmd = [
             self.dsi_studio_cmd,
             "--action=src",
             f"--source={dwi_file}",
-            f"--output={output_src}",
-            "--overwrite=1"
+            f"--bval={bval_file}",
+            f"--bvec={bvec_file}",
+            f"--output={output_src}"
         ]
 
+        # Try to find T1w image in anat directory
+        anat_dir = dwi_file.parents[1] / "anat"
+        t1w_files = list(anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz"))
+        if t1w_files:
+            cmd.append(f"--t1w={t1w_files[0]}")
+            self.logger.info(f"Found T1w for {base_id}: {t1w_files[0].name}")
+
+        # Try to find mask
+        mask_files = list(dwi_file.parent.glob(f"{base_id}*_desc-brain_mask.nii.gz"))
+        if mask_files:
+            cmd.append(f"--mask={mask_files[0]}")
+            self.logger.info(f"Found mask for {base_id}: {mask_files[0].name}")
+        elif self.require_mask:
+            self.logger.warning(f"Missing mask for {base_id}; skipping due to --require-mask")
+            return None
+
+        if self.require_t1w and not t1w_files:
+            self.logger.warning(f"Missing T1w for {base_id}; skipping due to --require-t1w")
+            return None
+        
+        # Check for existing SRC (could be .src.gz or .src.gz.sz)
+        src_exists = output_src.exists() or Path(f"{output_src}.sz").exists()
+        actual_src = output_src if output_src.exists() else Path(f"{output_src}.sz") if Path(f"{output_src}.sz").exists() else None
+        
+        if src_exists and self.skip_existing and not self._should_force('src'):
+            self.logger.info(f"SRC exists, skipping generation: {actual_src.name if actual_src else output_src.name}")
+            return actual_src or output_src
+        elif src_exists and self._should_force('src'):
+            self.logger.info(f"SRC exists but --force src is set, will overwrite: {actual_src.name if actual_src else output_src.name}")
+
+        self.logger.info(f"Running: {' '.join(cmd)}")
         if self.run_command(cmd):
             # DSI Studio may create .src.gz.sz instead of .src.gz
             if not output_src.exists():
@@ -533,9 +539,11 @@ class DSIStudioPipeline:
         subject_prefix = src_file.name.split('.src')[0]
 
         # Check for method-specific existing FIB files
+        # FIB files: modern format is .fz (not .gz or .sz)
+        # SRC files: modern format is .sz (compressed)
         method_suffixes = {
-            '4': ['.fib.gz'],  # GQI
-            '7': ['.odf.qsdr.fz', '.odf.qsdr.fib.gz'],  # QSDR
+            '4': ['.odf.gqi.fz'],  # GQI (method 4)
+            '7': ['.odf.qsdr.fz'],  # QSDR (method 7)
         }
         
         method_key = str(self.method) if self.method else '4'
@@ -554,7 +562,7 @@ class DSIStudioPipeline:
         elif existing_fib and self._should_force('fib'):
             self.logger.info(f"FIB (method {self.method}) exists but --force fib is set, will overwrite: {existing_fib[0].name}")
         elif self.skip_existing:
-            # Check if other method files exist
+            # Check if other method files exist (but requested method doesn't)
             all_fibs = list(self.fib_dir.glob(f"{subject_prefix}*"))
             other_method_fibs = [f for f in all_fibs if f not in existing_fib]
             if other_method_fibs:
@@ -567,10 +575,10 @@ class DSIStudioPipeline:
             f"--method={self.method}",
             f"--param0={self.param0}",
             f"--thread_count={self.threads}",
-            "--other_output=all",
-            "--check_btable=1"
+            "--other_output=all"
         ]
         
+        self.logger.info(f"Running: {' '.join(cmd)}")
         if self.run_command(cmd):
             generated_fib = self._collect_reconstruction_outputs(src_file)
             if generated_fib:
@@ -624,7 +632,8 @@ class DSIStudioPipeline:
             str(script_path),
             "--baseline", str(baseline_fib),
             "--followup", str(followup_fib),
-            "--output", str(output_path)
+            "--output", str(output_path),
+            "--method", str(self.method)
         ]
         
         self.logger.info(f"Computing longitudinal change (v2): {ses_f} - {ses_b} for {sub_f}")
@@ -714,7 +723,7 @@ class DSIStudioPipeline:
         if not fib_files:
             self.logger.warning("No FIB files available for connectivity extraction")
             return
-        extractor = Path(__file__).parent / "extract_connectivity_matrices.py"
+        extractor = Path(__file__).resolve().parents[1] / "connectivity" / "extract_connectivity_matrices.py"
         if not extractor.exists():
             self.logger.error(f"Connectivity extractor not found at {extractor}")
             return
@@ -891,19 +900,20 @@ class DSIStudioPipeline:
             src = self.generate_src(dwi)
             if src:
                 session_info['src_file'] = src.name
-                # Validate SRC — must be a file (not a directory) with non-zero size
-                if src.is_file() and src.stat().st_size > 0:
+                # Validate SRC
+                if src.exists() and src.stat().st_size > 0:
                     self.logger.info(f"✓ SRC validated: {src.name} ({src.stat().st_size / (1024*1024):.1f} MB)")
-                elif src.is_dir():
-                    self.logger.error(f"SRC path is a directory, not a file: {src} — likely a DSI Studio output naming issue")
-                    src = None
                 
                 fib = self.reconstruct_fib(src)
+                self.logger.debug(f"reconstruct_fib returned: {fib}")
                 if fib:
                     fib_files.append(fib)
+                    self.logger.debug(f"Added FIB to list: {fib.name}, total now: {len(fib_files)}")
                     session_info['fib_file'] = fib.name
                     session_info['status'] = 'success'
                     self.stats["processed"] += 1
+                else:
+                    self.logger.debug(f"reconstruct_fib returned None/False")
             else:
                 # If SRC generation was skipped, check if FIB already exists
                 if self.skip_existing:
@@ -924,9 +934,11 @@ class DSIStudioPipeline:
                     for suffix in expected_suffixes:
                         pattern = f"{subject_prefix}{suffix}"
                         matches = list(self.fib_dir.glob(pattern))
+                        self.logger.debug(f"Looking for FIB: {pattern} in {self.fib_dir} -> {len(matches)} matches")
                         if matches:
                             fib = matches[0]
                             fib_files.append(fib)
+                            self.logger.debug(f"Added FIB file: {fib.name}")
                             session_info['fib_file'] = fib.name
                             session_info['status'] = 'success'
                             self.stats["skipped_existing"] += 1
@@ -973,10 +985,16 @@ class DSIStudioPipeline:
             for followup_ses in sorted_sessions[1:]:
                 diff_fib = self.generate_longitudinal_diff(baseline_fib, sessions[followup_ses])
                 if diff_fib:
+                    self.stats["diff_ok"] += 1
                     group_key = f"{followup_ses}_minus_{baseline_ses}"
                     if group_key not in diff_groups:
                         diff_groups[group_key] = []
                     diff_groups[group_key].append(diff_fib)
+                else:
+                    self.stats["diff_failed"] += 1
+                    error_msg = f"Differential FIB failed: {sub_id} {followup_ses} - {baseline_ses}"
+                    self.stats["errors"].append(error_msg)
+                    self.logger.warning(error_msg)
 
         # Create longitudinal databases
         for group_key, group_fibs in diff_groups.items():
@@ -1023,19 +1041,47 @@ class DSIStudioPipeline:
         # --- Final Summary ---
         self.print_progress_summary(len(dwi_files), len(dwi_files))
         
-        summary = f"""
-╔══════════════════════════════════════════════════════════════╗
-║ ✓ PIPELINE COMPLETE                                          ║
-╠══════════════════════════════════════════════════════════════╣
-║ Total DWI files found:    {self.stats.get('found', len(dwi_files)):>6}
-║ Successfully processed:   {self.stats['processed']:>6}
-║ SRC files validated:      {self.stats['src_ok']:>6}
-║ FIB files validated:      {self.stats['fib_ok']:>6}
-║ Skipped (existing):       {self.stats['skipped_existing']:>6}
-║ Skipped (other reasons):  {self.stats['skipped_missing']:>6}
-╚══════════════════════════════════════════════════════════════╝
-"""
+        # Build summary with error checking
+        summary_lines = [
+            "╔══════════════════════════════════════════════════════════════╗",
+        ]
+        
+        # Check if there were any errors
+        if self.stats['diff_failed'] > 0 or self.stats['processed'] == 0:
+            summary_lines.append("║ ⚠️  PIPELINE COMPLETE WITH ISSUES                              ║")
+        else:
+            summary_lines.append("║ ✓ PIPELINE COMPLETE                                          ║")
+            
+        summary_lines.extend([
+            "╠══════════════════════════════════════════════════════════════╣",
+            f"║ Total DWI files found:    {self.stats.get('found', len(dwi_files)):>6}",
+            f"║ Successfully processed:   {self.stats['processed']:>6}",
+            f"║ SRC files validated:      {self.stats['src_ok']:>6}",
+            f"║ FIB files validated:      {self.stats['fib_ok']:>6}",
+            f"║ Skipped (existing):       {self.stats['skipped_existing']:>6}",
+            f"║ Skipped (other reasons):  {self.stats['skipped_missing']:>6}",
+        ])
+        
+        # Add differential FIB stats if longitudinal processing was done
+        if self.stats['diff_ok'] > 0 or self.stats['diff_failed'] > 0:
+            summary_lines.extend([
+                "╠══════════════════════════════════════════════════════════════╣",
+                f"║ Differential FIB OK:      {self.stats['diff_ok']:>6}",
+                f"║ Differential FIB failed:  {self.stats['diff_failed']:>6}",
+            ])
+        
+        summary_lines.append("╚══════════════════════════════════════════════════════════════╝")
+        
+        summary = "\n".join(summary_lines)
         self.logger.info(summary)
+        
+        # Log errors if any occurred
+        if self.stats['errors']:
+            self.logger.warning(f"\n⚠️  {len(self.stats['errors'])} ERROR(S) ENCOUNTERED:")
+            for error in self.stats['errors'][:10]:  # Show first 10 errors
+                self.logger.warning(f"  - {error}")
+            if len(self.stats['errors']) > 10:
+                self.logger.warning(f"  ... and {len(self.stats['errors']) - 10} more errors")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DSI Studio Preprocessing Pipeline")
@@ -1054,7 +1100,6 @@ if __name__ == "__main__":
     parser.add_argument("--skip_existing", action="store_true", help="Skip subjects if SRC/FIB already exist")
     parser.add_argument("--force", nargs='?', const='all', help="Force overwrite: 'database' (only db), 'diffs', 'src', 'fib', 'all' (default: all)")
     parser.add_argument("--min_file_age", type=int, default=300, help="Minimum file age in seconds (default: 300s/5min) to avoid processing files still being written")
-    parser.add_argument("--session", help="Only process a specific session (e.g., --session 1 for ses-1)")
     parser.add_argument("--pilot", action="store_true", help="Process only one randomly chosen subject")
     parser.add_argument("--dry_run", action="store_true", help="Show commands without running them")
     parser.add_argument("--run_connectivity", action="store_true", help="Run connectivity extraction after FIB generation")

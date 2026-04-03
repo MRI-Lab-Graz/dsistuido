@@ -12,6 +12,8 @@ bash setup_env.sh
 source ../venv/bin/activate
 ```
 
+Python dependencies are maintained in `requirements.txt` at the repository root.
+
 The installer uses **UV** for lightning-fast package installation (10-100x faster than pip).
 
 See [Installation Guide](installation/SETUP.md) for detailed setup instructions.
@@ -19,13 +21,13 @@ See [Installation Guide](installation/SETUP.md) for detailed setup instructions.
 ### 2. Validate Setup
 
 ```bash
-python scripts/validate_setup.py --config configs/example_config.json --test-input /path/to/data/
+python scripts/connectivity/validate_setup.py --config configs/example_config.json --test-input /path/to/data/
 ```
 
 ### 3. Pilot Test (1-2 files)
 
 ```bash
-python scripts/dsi_studio_pipeline.py \
+python scripts/pipeline/dsi_studio_pipeline.py \
     --qsiprep_dir /path/to/qsiprep \
     --output_dir /path/to/output \
     --pilot
@@ -34,7 +36,7 @@ python scripts/dsi_studio_pipeline.py \
 ### 4. Full Processing
 
 ```bash
-python scripts/dsi_studio_pipeline.py \
+python scripts/pipeline/dsi_studio_pipeline.py \
     --qsiprep_dir /path/to/qsiprep \
     --output_dir /path/to/output \
     --run_connectivity \
@@ -46,17 +48,33 @@ python scripts/dsi_studio_pipeline.py \
 ```
 dsistudio/
 ├── README.md                          # This file
+├── requirements.txt                   # Canonical Python dependencies
 ├── installation/                      # Setup & installation files
 │   ├── setup_env.sh                   # Environment setup script
 │   ├── install.sh                     # Installation helper
-│   └── requirements.txt               # Python dependencies
+│   └── requirements.txt               # Compatibility include (-r ../requirements.txt)
 ├── scripts/                           # All executable scripts
-│   ├── dsi_studio_pipeline.py         # Main pipeline
-│   ├── extract_connectivity_matrices.py
-│   ├── run_connectometry_batch.py
-│   ├── validate_setup.py
-│   ├── webui.py
-│   └── *.sh                           # Shell utility scripts
+│   ├── pipeline/
+│   │   ├── dsi_studio_pipeline.py
+│   │   ├── create_differential_fib.py
+│   │   └── monitor_pipeline.sh
+│   ├── connectivity/
+│   │   ├── extract_connectivity_matrices.py
+│   │   ├── run_connectometry_batch.py
+│   │   ├── validate_setup.py
+│   │   ├── convert_mat_to_csv.py
+│   │   └── generate_jpgs_from_tt.py
+│   ├── visualization/
+│   │   ├── generate_interactive_viewer.py
+│   │   └── create_thumbnail_pdfs.py
+│   ├── qa/
+│   │   └── check_fib_metrics.py
+│   ├── web/
+│   │   └── webui.py
+│   ├── common/
+│   │   └── utils.py
+│   ├── web_logs/
+│   └── web_settings/
 ├── configs/                           # Configuration templates
 │   ├── example_config.json
 │   ├── graph_analysis_config.json
@@ -65,7 +83,11 @@ dsistudio/
 ├── docs/                              # Documentation
 │   ├── CONFIGURATION_GUIDE.md         # Detailed config reference
 │   ├── PIPELINE_ENHANCEMENTS.md       # Feature overview
-│   └── ENHANCEMENTS_SUMMARY.txt
+│   ├── ENHANCEMENTS_SUMMARY.txt
+│   └── SCRIPT_INDEX.md                # Script inventory and cleanup guidance
+├── legacy/                            # Archived non-primary shell scripts
+│   ├── scripts/
+│   └── code/
 └── code/                              # Shared utilities & libraries
 ```
 
@@ -75,7 +97,7 @@ dsistudio/
 
 #### Standard Run
 ```bash
-python scripts/dsi_studio_pipeline.py \
+python scripts/pipeline/dsi_studio_pipeline.py \
     --qsiprep_dir /path/to/qsiprep \
     --output_dir /path/to/output \
     --dsi_studio_path /path/to/dsi-studio/
@@ -83,7 +105,7 @@ python scripts/dsi_studio_pipeline.py \
 
 #### With Connectivity Analysis
 ```bash
-python scripts/dsi_studio_pipeline.py \
+python scripts/pipeline/dsi_studio_pipeline.py \
     --qsiprep_dir /path/to/qsiprep \
     --output_dir /path/to/output \
     --run_connectivity \
@@ -92,7 +114,7 @@ python scripts/dsi_studio_pipeline.py \
 
 #### Resume Processing
 ```bash
-python scripts/dsi_studio_pipeline.py \
+python scripts/pipeline/dsi_studio_pipeline.py \
     --qsiprep_dir /path/to/qsiprep \
     --output_dir /path/to/output \
     --skip_existing
@@ -100,7 +122,7 @@ python scripts/dsi_studio_pipeline.py \
 
 #### Force Regeneration
 ```bash
-python scripts/dsi_studio_pipeline.py \
+python scripts/pipeline/dsi_studio_pipeline.py \
     --qsiprep_dir /path/to/qsiprep \
     --output_dir /path/to/output \
     --skip_existing --force
@@ -110,21 +132,21 @@ python scripts/dsi_studio_pipeline.py \
 
 #### Single File
 ```bash
-python scripts/extract_connectivity_matrices.py \
+python scripts/connectivity/extract_connectivity_matrices.py \
     --config configs/graph_analysis_config.json \
     subject.fz output_dir/
 ```
 
 #### Batch Processing
 ```bash
-python scripts/extract_connectivity_matrices.py \
+python scripts/connectivity/extract_connectivity_matrices.py \
     --config configs/graph_analysis_config.json \
     --batch /data/directory/ output_dir/
 ```
 
 #### Pilot Mode (1-2 files)
 ```bash
-python scripts/extract_connectivity_matrices.py \
+python scripts/connectivity/extract_connectivity_matrices.py \
     --config configs/graph_analysis_config.json \
     --batch /data/directory/ output_dir/ \
     --pilot --pilot-count 2
@@ -134,10 +156,10 @@ python scripts/extract_connectivity_matrices.py \
 
 ```bash
 # Basic validation
-python scripts/validate_setup.py
+python scripts/connectivity/validate_setup.py
 
 # With specific config
-python scripts/validate_setup.py --config configs/example_config.json
+python scripts/connectivity/validate_setup.py --config configs/example_config.json
 ```
 
 ## 📋 Command-Line Options Reference
@@ -241,12 +263,12 @@ output_folder/
 
 2. **Validate installation**
    ```bash
-   python scripts/validate_setup.py --config configs/example_config.json
+   python scripts/connectivity/validate_setup.py --config configs/example_config.json
    ```
 
 3. **Test with pilot**
    ```bash
-   python scripts/dsi_studio_pipeline.py \
+   python scripts/pipeline/dsi_studio_pipeline.py \
        --qsiprep_dir /path/to/qsiprep \
        --output_dir /path/to/output \
        --pilot
@@ -254,7 +276,7 @@ output_folder/
 
 4. **Run full pipeline**
    ```bash
-   python scripts/dsi_studio_pipeline.py \
+   python scripts/pipeline/dsi_studio_pipeline.py \
        --qsiprep_dir /path/to/qsiprep \
        --output_dir /path/to/output \
        --run_connectivity \
@@ -265,7 +287,7 @@ output_folder/
 
 ```bash
 # Batch extraction with custom config
-python scripts/extract_connectivity_matrices.py \
+python scripts/connectivity/extract_connectivity_matrices.py \
     --config configs/graph_analysis_config.json \
     --batch /data/subjects/ output/ \
     --tracks 100000 --threads 16
@@ -275,7 +297,7 @@ python scripts/extract_connectivity_matrices.py \
 
 ```bash
 # Run pipeline in background
-nohup python scripts/dsi_studio_pipeline.py \
+nohup python scripts/pipeline/dsi_studio_pipeline.py \
     --qsiprep_dir /path/to/qsiprep \
     --output_dir /path/to/output \
     > pipeline.log 2>&1 &
@@ -302,7 +324,7 @@ export PATH=${FSLDIR}/bin:${PATH}
 ### Configuration Errors
 ```bash
 # Validate configuration before running
-python scripts/validate_setup.py --config configs/your_config.json
+python scripts/connectivity/validate_setup.py --config configs/your_config.json
 ```
 
 ### Processing Failures
@@ -315,6 +337,7 @@ python scripts/validate_setup.py --config configs/your_config.json
 - **[Configuration Guide](docs/CONFIGURATION_GUIDE.md)** - Complete reference for configuration options
 - **[Pipeline Enhancements](docs/PIPELINE_ENHANCEMENTS.md)** - Feature overview and capabilities
 - **[Enhanced Summary](docs/ENHANCEMENTS_SUMMARY.txt)** - Additional details
+- **[Script Index](docs/SCRIPT_INDEX.md)** - Script purposes and cleanup recommendations
 
 ## 📋 File Guide
 
@@ -322,13 +345,13 @@ python scripts/validate_setup.py --config configs/your_config.json
 
 | Script | Purpose |
 |--------|---------|
-| `dsi_studio_pipeline.py` | Main processing pipeline |
-| `extract_connectivity_matrices.py` | Connectivity matrix extraction |
-| `run_connectometry_batch.py` | Batch connectometry analysis |
-| `validate_setup.py` | Setup validation tool |
-| `webui.py` | Web UI for visualization |
-| `inspect_fib.py` | FIB file inspection |
-| `utils.py` | Shared utilities |
+| `pipeline/dsi_studio_pipeline.py` | Main processing pipeline |
+| `connectivity/extract_connectivity_matrices.py` | Connectivity matrix extraction |
+| `connectivity/run_connectometry_batch.py` | Batch connectometry analysis |
+| `connectivity/validate_setup.py` | Setup validation tool |
+| `web/webui.py` | Web UI for visualization |
+| `qa/check_fib_metrics.py` | FIB metrics and `--inspect` single-file mode |
+| `pipeline/monitor_pipeline.sh` | Pipeline log monitor |
 
 ### Configuration Templates (in `configs/`)
 
@@ -343,9 +366,9 @@ python scripts/validate_setup.py --config configs/your_config.json
 
 ```bash
 # Show help for any script
-python scripts/dsi_studio_pipeline.py --help
-python scripts/extract_connectivity_matrices.py --help
-python scripts/validate_setup.py --help
+python scripts/pipeline/dsi_studio_pipeline.py --help
+python scripts/connectivity/extract_connectivity_matrices.py --help
+python scripts/connectivity/validate_setup.py --help
 ```
 
 ---

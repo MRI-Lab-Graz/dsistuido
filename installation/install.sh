@@ -62,7 +62,7 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 # Check if we're in the right directory
-if [[ ! -f "extract_connectivity_matrices.py" ]]; then
+if [[ ! -f "scripts/connectivity/extract_connectivity_matrices.py" ]]; then
     echo -e "${RED}❌ Please run this script from the repository root${NC}"
     exit 1
 fi
@@ -159,10 +159,10 @@ echo -e "${BLUE}🧪 Validating installation...${NC}"
 # Force headless mode for validation
 # export QT_QPA_PLATFORM=minimal
 
-if python3 validate_setup.py > /dev/null 2>&1; then
+if python3 scripts/connectivity/validate_setup.py > /dev/null 2>&1; then
     echo -e "${GREEN}✅ Setup validation passed${NC}"
 else
-    echo -e "${YELLOW}⚠️  Validation had warnings (run 'python validate_setup.py' to see details)${NC}"
+    echo -e "${YELLOW}⚠️  Validation had warnings (run 'python scripts/connectivity/validate_setup.py' to see details)${NC}"
 fi
 
 echo ""
@@ -170,5 +170,5 @@ echo -e "${GREEN}✅ Installation complete!${NC}"
 echo ""
 echo -e "${BLUE}🎯 To start analysis:${NC}"
 echo "1. source venv/bin/activate"
-echo "2. python run_connectometry_batch.py --config connectometry_simple.json"
+echo "2. python scripts/connectivity/run_connectometry_batch.py --config configs/connectometry_config.json"
 echo ""

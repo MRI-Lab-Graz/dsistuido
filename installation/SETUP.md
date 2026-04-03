@@ -42,7 +42,7 @@ source venv/bin/activate
 
 ### 3. Verify Installation
 ```bash
-python scripts/validate_setup.py
+python scripts/connectivity/validate_setup.py
 ```
 
 ## Manual UV Installation (Optional)
@@ -70,9 +70,12 @@ See [UV documentation](https://github.com/astral-sh/uv) for more details.
 - pandas
 - numpy
 - scipy
-- scikit-image
+- Flask
+- waitress
+- Pillow
+- reportlab
 
-See `requirements.txt` for the complete list.
+See `../requirements.txt` for the complete list.
 
 ## UV Advantages Over Pip
 
@@ -134,7 +137,7 @@ uv pip list
 
 2. **Validate setup:**
    ```bash
-   python scripts/validate_setup.py --config configs/example_config.json
+   python scripts/connectivity/validate_setup.py --config configs/example_config.json
    ```
 
 3. **Review main README:**
@@ -144,7 +147,7 @@ uv pip list
 
 4. **Start using the tools:**
    ```bash
-   python scripts/dsi_studio_pipeline.py --help
+   python scripts/pipeline/dsi_studio_pipeline.py --help
    ```
 
 See the main [README.md](../README.md) for usage instructions.

@@ -7,8 +7,21 @@ import os
 import sys
 import traceback
 
-def create_diff_fib(baseline_path, followup_path, output_path):
+def create_diff_fib(baseline_path, followup_path, output_path, method=4):
     """Create a differential FIB file for connectometry analysis.
+    
+    Args:
+        baseline_path: Path to baseline FIB file
+        followup_path: Path to followup FIB file
+        output_path: Path for output differential FIB file
+        method: Reconstruction method (4=GQI native space, 7=QSDR standard space)
+    
+    For GQI (method 4, native space): Shape mismatches are expected due to different
+    brain masks per session. These are logged as warnings and the operation is skipped
+    (returns False, not an error).
+    
+    For QSDR (method 7, standard space): Shape mismatches should NOT occur. If they do,
+    it indicates a preprocessing issue and is treated as an error.
     
     WARNING: This approach may not work correctly with DSI Studio's binary FIB format.
     DSI Studio FIB (.fz) files are in a custom binary format, not standard MATLAB .mat files.
@@ -35,6 +48,8 @@ def create_diff_fib(baseline_path, followup_path, output_path):
         
         found_any = False
         common_metrics = []
+        shape_mismatch_detected = False
+        
         for metric in metrics_to_diff:
             if metric in baseline_mat and metric in followup_mat:
                 print(f"Computing difference for {metric}...")
@@ -44,12 +59,19 @@ def create_diff_fib(baseline_path, followup_path, output_path):
                     common_metrics.append(metric)
                     found_any = True
                 else:
+                    shape_mismatch_detected = True
                     print(f"Warning: Shape mismatch for {metric}, skipping.")
                     print(f"  Baseline shape: {baseline_mat[metric].shape}, Followup shape: {followup_mat[metric].shape}")
         
-        if not found_any:
-            print("ERROR: No common metrics found to subtract!")
-            print(f"Available in baseline: {list(baseline_mat.keys())}")
+        # Handle shape mismatches based on reconstruction method
+        if not found_any and shape_mismatch_detected:
+            if method == 4:  # GQI in native space
+                print("\nINFO: Shape mismatch is expected for GQI (native space) due to different brain masks per session.")
+                print("This is normal and not an error. Skipping differential FIB for this pair.")
+                return False
+            else:  # QSDR or other methods in standard space
+                print("ERROR: No common metrics found to subtract!")
+                print(f"Available in baseline: {list(baseline_mat.keys())}")
             print(f"Available in followup: {list(followup_mat.keys())}")
             return False
         
@@ -86,9 +108,10 @@ if __name__ == "__main__":
     parser.add_argument('--baseline', required=True, help='Baseline FIB file')
     parser.add_argument('--followup', required=True, help='Followup FIB file')
     parser.add_argument('--output', required=True, help='Output differential FIB file')
+    parser.add_argument('--method', type=int, default=4, help='Reconstruction method (4=GQI native space, 7=QSDR standard space)')
     
     args = parser.parse_args()
-    success = create_diff_fib(args.baseline, args.followup, args.output)
+    success = create_diff_fib(args.baseline, args.followup, args.output, method=args.method)
     
     if not success:
         print("\n❌ Differential FIB creation failed!")

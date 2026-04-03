@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+
+{% block title %}DSI Studio Console - Pipeline{% endblock %}
+
+{% block content %}
+<div class="card feature-card border-info mb-3">
+    <div class="card-body py-3">
+        <div class="d-flex align-items-start">
+            <i class="fas fa-circle-info text-info me-2 mt-1"></i>
+            <div>
+                <strong>Quick Guide</strong>
+                <div class="text-muted small mt-1">
+                    Select QSIPrep + output paths, tune method/threads, then click <em>Run Pipeline</em>. The backend handles SRC/FIB/database generation and optional connectivity extraction.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card feature-card">
+    <div class="card-header">
+        <i class="fas fa-diagram-project me-2 text-success"></i>Pipeline Runner
+    </div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label">QSIPrep directory</label>
+                <div class="input-group path-picker-group" data-picker-mode="dir">
+                    <input class="form-control" id="p_qsiprep" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Output directory</label>
+                <div class="input-group path-picker-group" data-picker-mode="dir">
+                    <input class="form-control" id="p_output" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">DSI Studio command</label>
+                <div class="input-group path-picker-group" data-picker-mode="file">
+                    <input class="form-control" id="p_dsi_cmd" placeholder="/data/local/software/dsi-studio/dsi_studio" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">DSI Studio folder (optional)</label>
+                <div class="input-group path-picker-group" data-picker-mode="dir">
+                    <input class="form-control" id="p_dsi_path" placeholder="/data/local/software/dsi-studio" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <label class="form-label">Method</label>
+                <select class="form-select" id="p_method">
+                    <option value="4">4 (GQI)</option>
+                    <option value="7">7 (QSDR)</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">param0</label>
+                <input class="form-control" id="p_param0" value="1.25" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Threads</label>
+                <input class="form-control" id="p_threads" value="8" />
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Rawdata directory</label>
+                <div class="input-group path-picker-group" data-picker-mode="dir">
+                    <input class="form-control" id="p_rawdata" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Database name</label>
+                <input class="form-control" id="p_db_name" value="connectometry.db.fib.gz" />
+            </div>
+
+            <div class="col-md-4">
+                <label class="form-label">Min file age (sec)</label>
+                <input class="form-control" id="p_min_file_age" value="300" />
+            </div>
+            <div class="col-md-8">
+                <label class="form-label">Connectivity config JSON</label>
+                <div class="input-group path-picker-group" data-picker-mode="file">
+                    <input class="form-control" id="p_connectivity_config" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Connectivity output directory</label>
+                <div class="input-group path-picker-group" data-picker-mode="dir">
+                    <input class="form-control" id="p_connectivity_output" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Connectivity threads</label>
+                <input class="form-control" id="p_connectivity_threads" />
+            </div>
+        </div>
+
+        <hr>
+        <div class="row g-2">
+            <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_require_mask"><label class="form-check-label" for="p_require_mask">require_mask</label></div>
+            <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_require_t1w"><label class="form-check-label" for="p_require_t1w">require_t1w</label></div>
+            <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_skip_existing"><label class="form-check-label" for="p_skip_existing">skip_existing</label></div>
+            <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_verify_rawdata"><label class="form-check-label" for="p_verify_rawdata">verify_rawdata</label></div>
+            <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_pilot"><label class="form-check-label" for="p_pilot">pilot</label></div>
+            <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_dry_run"><label class="form-check-label" for="p_dry_run">dry_run</label></div>
+            <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_run_connectivity"><label class="form-check-label" for="p_run_connectivity">run_connectivity</label></div>
+        </div>
+
+        <div class="d-flex gap-2 flex-wrap mt-3">
+            <button class="btn btn-success" type="button" id="runPipelineBtn"><i class="fas fa-play me-1"></i>Run Pipeline</button>
+            <button class="btn btn-outline-primary" type="button" id="savePipelinePresetBtn"><i class="fas fa-floppy-disk me-1"></i>Save Preset</button>
+            <button class="btn btn-outline-secondary" type="button" id="loadPipelinePresetBtn"><i class="fas fa-download me-1"></i>Load Preset</button>
+            <select class="form-select" id="pipelinePresetSelect" style="max-width: 300px;"></select>
+        </div>
+
+        <pre class="mt-3 p-3 bg-dark text-light rounded" id="pipelineResult">Ready.</pre>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const resultEl = document.getElementById('pipelineResult');
+
+    function value(id) { return (document.getElementById(id).value || '').trim(); }
+    function checked(id) { return document.getElementById(id).checked; }
+
+    function buildPayload() {
+        return {
+            qsiprep_dir: value('p_qsiprep'),
+            output_dir: value('p_output'),
+            dsi_studio_cmd: value('p_dsi_cmd'),
+            dsi_studio_path: value('p_dsi_path'),
+            method: value('p_method'),
+            param0: value('p_param0'),
+            threads: value('p_threads'),
+            rawdata_dir: value('p_rawdata'),
+            db_name: value('p_db_name'),
+            min_file_age: value('p_min_file_age'),
+            connectivity_config: value('p_connectivity_config'),
+            connectivity_output_dir: value('p_connectivity_output'),
+            connectivity_threads: value('p_connectivity_threads'),
+            require_mask: checked('p_require_mask'),
+            require_t1w: checked('p_require_t1w'),
+            skip_existing: checked('p_skip_existing'),
+            verify_rawdata: checked('p_verify_rawdata'),
+            pilot: checked('p_pilot'),
+            dry_run: checked('p_dry_run'),
+            run_connectivity: checked('p_run_connectivity'),
+        };
+    }
+
+    function applyPayload(data) {
+        if (!data) return;
+        const mapping = {
+            p_qsiprep: 'qsiprep_dir',
+            p_output: 'output_dir',
+            p_dsi_cmd: 'dsi_studio_cmd',
+            p_dsi_path: 'dsi_studio_path',
+            p_method: 'method',
+            p_param0: 'param0',
+            p_threads: 'threads',
+            p_rawdata: 'rawdata_dir',
+            p_db_name: 'db_name',
+            p_min_file_age: 'min_file_age',
+            p_connectivity_config: 'connectivity_config',
+            p_connectivity_output: 'connectivity_output_dir',
+            p_connectivity_threads: 'connectivity_threads',
+        };
+        Object.keys(mapping).forEach(id => {
+            const key = mapping[id];
+            if (data[key] !== undefined && data[key] !== null) document.getElementById(id).value = data[key];
+        });
+
+        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity'].forEach(k => {
+            const el = document.getElementById('p_' + k);
+            if (el && data[k] !== undefined) el.checked = Boolean(data[k]);
+        });
+    }
+
+    async function runPipeline() {
+        try {
+            const payload = buildPayload();
+            const res = await window.dsiUi.fetchJson('/api/run/pipeline', payload);
+            resultEl.textContent = JSON.stringify(res, null, 2);
+            const currentProject = {
+                ...window.dsiUi.getCurrentProject(),
+                qsiprep_dir: payload.qsiprep_dir,
+                output_dir: payload.output_dir,
+                rawdata_dir: payload.rawdata_dir,
+                dsi_studio_cmd: payload.dsi_studio_cmd,
+                connectivity_config: payload.connectivity_config,
+            };
+            window.dsiUi.setCurrentProject(currentProject);
+            window.dsiUi.refreshJobs();
+        } catch (error) {
+            resultEl.textContent = error.message;
+            window.dsiUi.notify(error.message, true);
+        }
+    }
+
+    async function savePreset() {
+        try {
+            await window.dsiUi.savePreset('pipeline', buildPayload());
+            window.dsiUi.notify('Pipeline preset saved.');
+            await loadPresetList();
+        } catch (error) {
+            window.dsiUi.notify(error.message, true);
+        }
+    }
+
+    async function loadPresetList() {
+        const select = document.getElementById('pipelinePresetSelect');
+        const presets = await window.dsiUi.listPresets('pipeline');
+        if (!presets.length) {
+            select.innerHTML = '<option value="">No presets</option>';
+            return;
+        }
+        select.innerHTML = '';
+        presets.forEach((p) => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = p.name;
+            select.appendChild(opt);
+        });
+    }
+
+    async function loadSelectedPreset() {
+        const filename = document.getElementById('pipelinePresetSelect').value;
+        if (!filename) return;
+        try {
+            const data = await window.dsiUi.readPreset(filename);
+            applyPayload(data.settings || {});
+            window.dsiUi.notify(`Loaded ${filename}`);
+        } catch (error) {
+            window.dsiUi.notify(error.message, true);
+        }
+    }
+
+    document.getElementById('runPipelineBtn').addEventListener('click', runPipeline);
+    document.getElementById('savePipelinePresetBtn').addEventListener('click', savePreset);
+    document.getElementById('loadPipelinePresetBtn').addEventListener('click', loadSelectedPreset);
+
+    const p = window.dsiUi.getCurrentProject();
+    if (p) {
+        applyPayload({
+            qsiprep_dir: p.qsiprep_dir,
+            output_dir: p.output_dir,
+            rawdata_dir: p.rawdata_dir,
+            dsi_studio_cmd: p.dsi_studio_cmd,
+            connectivity_config: p.connectivity_config,
+        });
+    }
+
+    loadPresetList();
+})();
+</script>
+{% endblock %}

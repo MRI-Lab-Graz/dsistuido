@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}DSI Studio Console - Connectometry{% endblock %}
+
+{% block content %}
+<div class="card feature-card border-info mb-3">
+    <div class="card-body py-3">
+        <div class="d-flex align-items-start">
+            <i class="fas fa-circle-info text-info me-2 mt-1"></i>
+            <div>
+                <strong>Quick Guide</strong>
+                <div class="text-muted small mt-1">
+                    Choose a connectometry config, output folder, and optional batch/custom settings. Run jobs from here while monitoring backend logs in the Jobs panel.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card feature-card">
+    <div class="card-header">
+        <i class="fas fa-chart-line me-2 text-warning"></i>Connectometry Batch Runner
+    </div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-8">
+                <label class="form-label">Config JSON</label>
+                <div class="input-group path-picker-group" data-picker-mode="file">
+                    <input class="form-control" id="c_config" placeholder="/path/to/connectometry_config.json" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Output directory</label>
+                <div class="input-group path-picker-group" data-picker-mode="dir">
+                    <input class="form-control" id="c_output" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <label class="form-label">Batch index</label>
+                <input class="form-control" id="c_batch" placeholder="optional" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Workers</label>
+                <input class="form-control" id="c_workers" value="1" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Retry-failed summary JSON</label>
+                <div class="input-group path-picker-group" data-picker-mode="file">
+                    <input class="form-control" id="c_retry" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+
+            <div class="col-12">
+                <label class="form-label">Custom params JSON string</label>
+                <textarea class="form-control" id="c_custom" rows="3" placeholder='{"index_name":"qa","effect_size":0.3}'></textarea>
+            </div>
+        </div>
+
+        <hr>
+        <div class="row g-2">
+            <div class="col-md-2 form-check"><input class="form-check-input" type="checkbox" id="c_test"><label class="form-check-label" for="c_test">test</label></div>
+            <div class="col-md-2 form-check"><input class="form-check-input" type="checkbox" id="c_dry_run"><label class="form-check-label" for="c_dry_run">dry_run</label></div>
+            <div class="col-md-2 form-check"><input class="form-check-input" type="checkbox" id="c_nohup"><label class="form-check-label" for="c_nohup">nohup</label></div>
+        </div>
+
+        <div class="d-flex gap-2 flex-wrap mt-3">
+            <button class="btn btn-success" type="button" id="runConnectometryBtn"><i class="fas fa-play me-1"></i>Run Connectometry</button>
+            <button class="btn btn-outline-primary" type="button" id="saveConnectometryPresetBtn"><i class="fas fa-floppy-disk me-1"></i>Save Preset</button>
+            <button class="btn btn-outline-secondary" type="button" id="loadConnectometryPresetBtn"><i class="fas fa-download me-1"></i>Load Preset</button>
+            <select class="form-select" id="connectometryPresetSelect" style="max-width: 300px;"></select>
+        </div>
+
+        <pre class="mt-3 p-3 bg-dark text-light rounded" id="connectometryResult">Ready.</pre>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const resultEl = document.getElementById('connectometryResult');
+
+    function value(id) { return (document.getElementById(id).value || '').trim(); }
+    function checked(id) { return document.getElementById(id).checked; }
+
+    function buildPayload() {
+        return {
+            config: value('c_config'),
+            output: value('c_output'),
+            batch: value('c_batch'),
+            workers: value('c_workers'),
+            custom: value('c_custom'),
+            retry_failed: value('c_retry'),
+            test: checked('c_test'),
+            dry_run: checked('c_dry_run'),
+            nohup: checked('c_nohup'),
+        };
+    }
+
+    function applyPayload(data) {
+        if (!data) return;
+        ['config','output','batch','workers','custom','retry_failed'].forEach(k => {
+            const el = document.getElementById('c_' + k.replace('retry_failed','retry'));
+            if (el && data[k] !== undefined && data[k] !== null) el.value = data[k];
+        });
+        ['test','dry_run','nohup'].forEach(k => {
+            const el = document.getElementById('c_' + k);
+            if (el && data[k] !== undefined) el.checked = Boolean(data[k]);
+        });
+    }
+
+    async function runConnectometry() {
+        try {
+            const payload = buildPayload();
+            const res = await window.dsiUi.fetchJson('/api/run/connectometry', payload);
+            resultEl.textContent = JSON.stringify(res, null, 2);
+            window.dsiUi.refreshJobs();
+        } catch (error) {
+            resultEl.textContent = error.message;
+            window.dsiUi.notify(error.message, true);
+        }
+    }
+
+    async function savePreset() {
+        try {
+            await window.dsiUi.savePreset('connectometry', buildPayload());
+            window.dsiUi.notify('Connectometry preset saved.');
+            await loadPresetList();
+        } catch (error) {
+            window.dsiUi.notify(error.message, true);
+        }
+    }
+
+    async function loadPresetList() {
+        const select = document.getElementById('connectometryPresetSelect');
+        const presets = await window.dsiUi.listPresets('connectometry');
+        if (!presets.length) {
+            select.innerHTML = '<option value="">No presets</option>';
+            return;
+        }
+        select.innerHTML = '';
+        presets.forEach((p) => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = p.name;
+            select.appendChild(opt);
+        });
+    }
+
+    async function loadSelectedPreset() {
+        const filename = document.getElementById('connectometryPresetSelect').value;
+        if (!filename) return;
+        try {
+            const data = await window.dsiUi.readPreset(filename);
+            applyPayload(data.settings || {});
+            window.dsiUi.notify(`Loaded ${filename}`);
+        } catch (error) {
+            window.dsiUi.notify(error.message, true);
+        }
+    }
+
+    document.getElementById('runConnectometryBtn').addEventListener('click', runConnectometry);
+    document.getElementById('saveConnectometryPresetBtn').addEventListener('click', savePreset);
+    document.getElementById('loadConnectometryPresetBtn').addEventListener('click', loadSelectedPreset);
+
+    const p = window.dsiUi.getCurrentProject();
+    if (p && p.connectivity_config) document.getElementById('c_config').value = p.connectivity_config;
+
+    loadPresetList();
+})();
+</script>
+{% endblock %}

@@ -124,7 +124,7 @@ The pipeline maintains a `self.stats` dictionary with:
 
 **Run with progress tracking and validation:**
 ```bash
-python dsi_studio_pipeline.py \
+python scripts/pipeline/dsi_studio_pipeline.py \
   --qsiprep_dir /data/qsiprep \
   --output_dir /data/output \
   --skip_existing \

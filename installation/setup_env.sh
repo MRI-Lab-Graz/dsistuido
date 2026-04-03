@@ -34,8 +34,11 @@ echo "🔌 Activating virtual environment..."
 source ../venv/bin/activate
 
 # Install dependencies using UV
-if [ -f "requirements.txt" ]; then
-    echo "📥 Installing dependencies with UV from requirements.txt..."
+if [ -f "../requirements.txt" ]; then
+    echo "📥 Installing dependencies with UV from ../requirements.txt..."
+    uv pip install -r ../requirements.txt
+elif [ -f "requirements.txt" ]; then
+    echo "📥 Installing dependencies with UV from local requirements.txt..."
     uv pip install -r requirements.txt
 else
     echo "⚠️  Warning: requirements.txt not found. Installing default packages with UV..."
@@ -54,8 +57,8 @@ echo "To start using the tools, run:"
 echo "  source ../venv/bin/activate"
 echo ""
 echo "Then you can run the scripts:"
-echo "  python ../scripts/dsi_studio_pipeline.py --help"
-echo "  python ../scripts/validate_setup.py"
+echo "  python ../scripts/pipeline/dsi_studio_pipeline.py --help"
+echo "  python ../scripts/connectivity/validate_setup.py"
 echo ""
 echo "📝 Note for Headless Servers:"
 echo "If you are running on a server without a display, you may need 'xvfb' to run DSI Studio."

@@ -17,13 +17,13 @@ These flags control how the pipeline handles existing output files:
 **Example usage:**
 ```bash
 # Normal run - always process all files
-python dsi_studio_pipeline.py --qsiprep_dir /data/qsiprep --output_dir /data/output
+python scripts/pipeline/dsi_studio_pipeline.py --qsiprep_dir /data/qsiprep --output_dir /data/output
 
 # Resume run - skip existing files
-python dsi_studio_pipeline.py --qsiprep_dir /data/qsiprep --output_dir /data/output --skip_existing
+python scripts/pipeline/dsi_studio_pipeline.py --qsiprep_dir /data/qsiprep --output_dir /data/output --skip_existing
 
 # Regenerate specific files - force overwrite even with skip_existing
-python dsi_studio_pipeline.py --qsiprep_dir /data/qsiprep --output_dir /data/output --skip_existing --force
+python scripts/pipeline/dsi_studio_pipeline.py --qsiprep_dir /data/qsiprep --output_dir /data/output --skip_existing --force
 ```
 
 ---

@@ -72,10 +72,10 @@ cat << 'EOF'
    - Ratio of successful validation
 
 ### 6. MONITORING TOOL
-   New script: monitor_pipeline.sh
+   Active script: scripts/pipeline/monitor_pipeline.sh
    
    Usage:
-   ./monitor_pipeline.sh
+   ./scripts/pipeline/monitor_pipeline.sh --log-dir /path/to/output
    
    Features:
    - Color-coded log output (green=success, red=error, yellow=warning)
@@ -84,7 +84,7 @@ cat << 'EOF'
 
 ## FILES MODIFIED
 
-1. dsi_studio_pipeline.py
+1. scripts/pipeline/dsi_studio_pipeline.py
    - Added validate_fib_file() method
    - Added print_progress_summary() method
    - Enhanced main run() loop with progress tracking
@@ -99,7 +99,7 @@ cat << 'EOF'
    - Usage examples
    - Performance notes
 
-2. monitor_pipeline.sh
+2. scripts/pipeline/monitor_pipeline.sh
    - Real-time pipeline monitoring script
    - Color-coded log output
    - Automatic log file detection
@@ -107,7 +107,7 @@ cat << 'EOF'
 ## USAGE EXAMPLES
 
 ### Run pipeline with all enhancements:
-python dsi_studio_pipeline.py \
+python scripts/pipeline/dsi_studio_pipeline.py \
   --qsiprep_dir /data/local/129_PK01/derivatives/qsiprep \
   --output_dir /data/local/129_PK01/derivatives/dsistudio_connectomics \
   --require_mask \
@@ -118,13 +118,13 @@ python dsi_studio_pipeline.py \
   --connectivity_config /data/local/software/dsistuido/graph_analysis_config.json
 
 ### Monitor in separate terminal:
-./monitor_pipeline.sh
+./scripts/pipeline/monitor_pipeline.sh --log-dir /path/to/output
 
 ### Regenerate missing files after incomplete run:
-python dsi_studio_pipeline.py ... --skip_existing
+python scripts/pipeline/dsi_studio_pipeline.py ... --skip_existing
 
 ### Force regeneration of corrupted files:
-python dsi_studio_pipeline.py ... --skip_existing --force
+python scripts/pipeline/dsi_studio_pipeline.py ... --skip_existing --force
 
 ## EXPECTED OUTPUT
 
