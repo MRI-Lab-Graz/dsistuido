@@ -7,14 +7,15 @@ Advanced Python tool for extracting connectivity matrices using DSI Studio with 
 ### 1. Installation
 
 ```bash
-cd installation/
-bash setup_env.sh
-source ../venv/bin/activate
+bash installation/install.sh
+source venv/bin/activate
 ```
 
 Python dependencies are maintained in `requirements.txt` at the repository root.
 
-The installer uses **UV** for lightning-fast package installation (10-100x faster than pip).
+`installation/install.sh` now installs the latest compatible DSI Studio release automatically based on OS, CPU architecture, and CUDA availability, then updates the repo config files to point at that executable.
+
+`installation/setup_env.sh` remains available if you only want the Python environment.
 
 See [Installation Guide](installation/SETUP.md) for detailed setup instructions.
 
@@ -257,7 +258,7 @@ output_folder/
 
 1. **Setup environment**
    ```bash
-   cd installation && bash setup_env.sh && cd ..
+    bash installation/install.sh
    source venv/bin/activate
    ```
 

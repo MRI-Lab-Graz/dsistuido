@@ -4,6 +4,8 @@
 # UV is a lightning-fast Python package installer (https://github.com/astral-sh/uv)
 
 echo "🚀 Setting up Python environment for DSI Studio Analysis Tools with UV..."
+echo "ℹ️  This script manages the Python environment only."
+echo "ℹ️  To install or reinstall the latest DSI Studio binary, run: bash installation/install.sh"
 
 # Check if uv is available
 if ! command -v uv &> /dev/null; then

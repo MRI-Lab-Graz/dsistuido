@@ -1,7 +1,7 @@
 {
   "comment": "Configuration for DSI Studio Connectometry Analysis (--action=cnt)",
   "description": "This file defines parameters and their ranges for batch connectometry analysis",
-  "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio",
   "core_parameters": {
     "source": {
       "description": "Path to the db.fib.gz connectometry database file",

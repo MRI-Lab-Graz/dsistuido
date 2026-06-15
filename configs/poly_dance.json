@@ -1,7 +1,7 @@
 {
   "comment": "Configuration for DSI Studio Connectometry Analysis (--action=cnt)",
   "description": "This file defines parameters and their ranges for batch connectometry analysis",
-  "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio",
   "core_parameters": {
     "source": {
       "description": "Path to the db.fib.gz connectometry database file",
@@ -14,7 +14,19 @@
       "type": "string",
       "required": true,
       "options": [
-        "qa","volume","dti_fa","ha","md","ad","rd","iso","gfa","rdi","od","isovf","icvf"
+        "qa",
+        "volume",
+        "dti_fa",
+        "ha",
+        "md",
+        "ad",
+        "rd",
+        "iso",
+        "gfa",
+        "rdi",
+        "od",
+        "isovf",
+        "icvf"
       ],
       "default": "qa",
       "value": "qa"
@@ -119,7 +131,7 @@
       "type": "int",
       "default": 4,
       "range": [
-4
+        4
       ],
       "values": [
         4
@@ -151,7 +163,7 @@
       "type": "int",
       "default": 16,
       "range": [
-16
+        16
       ],
       "step": 8,
       "values": [
@@ -218,7 +230,19 @@
       "name": "analysis_multimodal_sweep",
       "description": "Effect size and length threshold sweep across all diffusion modalities",
       "parameters": {
-        "index_name": ["qa", "dti_fa", "md", "ad", "rd", "iso", "gfa", "rdi", "od", "isovf", "icvf"],
+        "index_name": [
+          "qa",
+          "dti_fa",
+          "md",
+          "ad",
+          "rd",
+          "iso",
+          "gfa",
+          "rdi",
+          "od",
+          "isovf",
+          "icvf"
+        ],
         "effect_size": "0.20:0.02:0.30",
         "length_threshold": "20:2:30",
         "permutation": 10000,

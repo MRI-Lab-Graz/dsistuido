@@ -1,6 +1,6 @@
 {
   "comment": "Example configuration for connectivity matrix extraction",
-  "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio",
   "atlases": [
     "ATAG_basal_ganglia",
     "Campbell",

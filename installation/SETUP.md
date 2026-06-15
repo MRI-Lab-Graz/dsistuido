@@ -6,13 +6,15 @@ UV is a lightning-fast Python package installer (10-100x faster than pip).
 
 ```bash
 # From the dsistudio root directory
-cd installation/
-bash setup_env.sh
+bash installation/install.sh
 
 # Activate the environment
-cd ..
 source venv/bin/activate
 ```
+
+`installation/install.sh` installs the latest compatible DSI Studio build for the current OS, CPU architecture, and CUDA/GPU availability, then updates all repo config files with the resolved executable path.
+
+If you only need the Python environment, run `bash installation/setup_env.sh` instead.
 
 ## What UV Does
 
@@ -23,26 +25,34 @@ source venv/bin/activate
 
 ## Installation Steps
 
-### 1. Run the Setup Script (Automatic UV Installation)
+### 1. Run the Full Installer (DSI Studio + Python Environment)
 ```bash
-cd installation/
-bash setup_env.sh
+bash installation/install.sh
 ```
 
 The script will:
+- Detect the current OS, architecture, and CUDA/GPU availability
+- Download the latest matching DSI Studio release asset from GitHub
+- Install DSI Studio into a managed directory and update `configs/*.json`
 - Check for UV and install it if needed
 - Create virtual environment with UV
 - Install all dependencies using UV
 
-### 2. Activate Virtual Environment
+### 2. Python-Only Setup (Optional)
 ```bash
-cd ..
+bash installation/setup_env.sh
+```
+
+Use this variant only when DSI Studio is already installed and `dsi_studio_cmd` is already configured.
+
+### 3. Activate Virtual Environment
+```bash
 source venv/bin/activate
 ```
 
-### 3. Verify Installation
+### 4. Verify Installation
 ```bash
-python scripts/connectivity/validate_setup.py
+python scripts/connectivity/validate_setup.py --config configs/example_config.json
 ```
 
 ## Manual UV Installation (Optional)
@@ -64,7 +74,8 @@ See [UV documentation](https://github.com/astral-sh/uv) for more details.
 ### System Requirements
 - Python 3.6 or later
 - 8+ GB RAM recommended
-- DSI Studio installed and accessible
+- Internet access for automatic DSI Studio downloads when using `installation/install.sh`
+- DSI Studio installed and accessible if using `installation/setup_env.sh` only
 
 ### Python Dependencies
 - pandas
@@ -103,14 +114,14 @@ bash setup_env.sh
 - Update shebang in scripts if needed
 
 ### Permission Denied
-- Make scripts executable: `chmod +x setup_env.sh`
-- Run with bash explicitly: `bash setup_env.sh`
+- Make scripts executable: `chmod +x installation/install.sh installation/setup_env.sh`
+- Run with bash explicitly: `bash installation/install.sh`
 
 ### Dependency Installation Fails with UV
 ```bash
 # Clear UV cache and retry
 rm -rf ~/.cache/uv
-bash setup_env.sh
+bash installation/setup_env.sh
 ```
 
 ## Using UV After Installation

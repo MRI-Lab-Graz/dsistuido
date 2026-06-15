@@ -1,11 +1,9 @@
 {
   "comment": "DSI Studio Connectivity Matrix Extraction Configuration - Processing settings only",
-  
-  "dsi_studio_cmd": "/Applications/DSI_Studio.app/Contents/MacOS/dsi_studio",
-  
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio",
   "atlases": [
     "AAL",
-    "AAL2", 
+    "AAL2",
     "AAL3",
     "Brodmann",
     "HCP-MMP",
@@ -28,7 +26,7 @@
     "fa",
     "dti_fa",
     "md",
-    "ad", 
+    "ad",
     "rd",
     "iso",
     "rdi",
@@ -65,7 +63,7 @@
     "method": "Tracking algorithm: 0=Streamline(Euler), 1=RK4, 2=Voxel tracking",
     "otsu_threshold": "Default Otsu threshold (0.1-1.0)",
     "fa_threshold": "FA threshold for termination (0=automatic)",
-    "turning_angle": "Maximum turning angle in degrees (0=random 15-90°)",
+    "turning_angle": "Maximum turning angle in degrees (0=random 15-90\u00b0)",
     "step_size": "Step size in mm (0=random 1-3 voxels)",
     "smoothing": "Fraction of previous direction to mix in (0-1)",
     "min_length": "Minimum fiber length in mm (0=dataset specific)",

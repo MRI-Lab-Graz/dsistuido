@@ -1,24 +1,20 @@
 {
   "_comment": "Complete configuration for DSI Studio connectivity extraction",
   "_comment2": "All parameters explicitly defined for transparency",
-  
   "atlases": [
     "AAL3",
     "Brainnectome"
   ],
-  
   "connectivity_values": [
     "count",
     "ncount",
     "ncount2"
   ],
-  
   "track_count": 5000000,
   "thread_count": 8,
-  "dsi_studio_cmd": "/data/local/software/dsi-studio/dsi_studio",
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio",
   "reconstruction_method": 4,
   "_comment_reconstruction": "4=GQI (native space), 7=QSDR (MNI space). Must match pipeline --method",
-  
   "tracking_parameters": {
     "method": 0,
     "otsu_threshold": 0.6,
@@ -33,7 +29,6 @@
     "random_seed": 0,
     "dt_threshold": 0.2
   },
-  
   "connectivity_options": {
     "connectivity_type": "end",
     "connectivity_threshold": 0.001,

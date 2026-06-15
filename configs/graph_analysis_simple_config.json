@@ -3,20 +3,16 @@
   "_comment2": "All parameters explicitly defined for transparency",
   "_comment3": "Updated to use atlases available in DSI Studio installation",
   "_comment4": "AAL atlases are NOT available - use Brainnectome, HCP-MMP, or Brodmann instead",
-  
   "atlases": [
     "Brainnectome",
     "HCP-MMP"
   ],
-  
   "connectivity_values": [
     "count"
   ],
-  
   "track_count": 1000000,
   "thread_count": 8,
-  "dsi_studio_cmd": "dsi_studio",
-  
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio",
   "tracking_parameters": {
     "method": 0,
     "otsu_threshold": 0.6,
@@ -31,7 +27,6 @@
     "random_seed": 0,
     "dt_threshold": 0.2
   },
-  
   "connectivity_options": {
     "connectivity_type": "pass",
     "connectivity_threshold": 0.001,
