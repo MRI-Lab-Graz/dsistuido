@@ -2,38 +2,14 @@
   "comment": "DSI Studio Connectivity Matrix Extraction Configuration - Processing settings only",
   "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio",
   "atlases": [
-    "AAL",
-    "AAL2",
-    "AAL3",
-    "Brodmann",
+    "Brainnectome",
     "HCP-MMP",
-    "AICHA",
-    "Talairach",
-    "FreeSurferDKT",
     "FreeSurferDKT_Cortical",
-    "Schaefer100",
-    "Schaefer200",
-    "Schaefer400",
-    "Gordon333",
-    "Power264"
+    "FreeSurferDKT_Subcortical"
   ],
   "connectivity_values": [
     "count",
-    "ncount",
-    "ncount2",
-    "mean_length",
-    "qa",
-    "fa",
-    "dti_fa",
-    "md",
-    "ad",
-    "rd",
-    "iso",
-    "rdi",
-    "ndi",
-    "dti_ad",
-    "dti_rd",
-    "dti_md"
+    "qa"
   ],
   "track_count": 100000,
   "thread_count": 8,
@@ -53,7 +29,6 @@
   },
   "connectivity_options": {
     "connectivity_type": "pass",
-    "connectivity_threshold": 0.001,
     "connectivity_output": "matrix,connectogram,measure"
   },
   "comments": {

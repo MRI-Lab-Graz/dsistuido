@@ -279,6 +279,7 @@ def build_pipeline_command(payload: Dict) -> List[str]:
     ]
 
     optional_args = {
+        "project_root": "--project_root",
         "dsi_studio_cmd": "--dsi_studio_cmd",
         "dsi_studio_path": "--dsi_studio_path",
         "method": "--method",
@@ -290,6 +291,9 @@ def build_pipeline_command(payload: Dict) -> List[str]:
         "connectivity_config": "--connectivity_config",
         "connectivity_output_dir": "--connectivity_output_dir",
         "connectivity_threads": "--connectivity_threads",
+        "force": "--force",
+        "apptainer_image": "--apptainer_image",
+        "apptainer_bind": "--apptainer_bind",
     }
 
     for field, flag in optional_args.items():
@@ -305,6 +309,7 @@ def build_pipeline_command(payload: Dict) -> List[str]:
         "pilot",
         "dry_run",
         "run_connectivity",
+        "apptainer",
     ]
     for flag in bool_flags:
         if payload.get(flag):

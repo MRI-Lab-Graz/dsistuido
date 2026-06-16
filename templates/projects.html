@@ -66,14 +66,6 @@
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label">DSI Studio executable</label>
-                    <div class="input-group path-picker-group" data-picker-mode="file">
-                        <input class="form-control" id="proj_dsi_cmd" placeholder="/data/local/software/dsi-studio/dsi_studio" />
-                        <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
-                    </div>
-                </div>
-
-                <div class="mb-3">
                     <label class="form-label">Connectivity config JSON</label>
                     <div class="input-group path-picker-group" data-picker-mode="file">
                         <input class="form-control" id="proj_conn_config" placeholder="/data/local/software/dsistuido/configs/connectivity_config.json" />
@@ -121,7 +113,6 @@
         qsiprep_dir: document.getElementById('proj_qsiprep'),
         output_dir: document.getElementById('proj_output'),
         rawdata_dir: document.getElementById('proj_rawdata'),
-        dsi_studio_cmd: document.getElementById('proj_dsi_cmd'),
         connectivity_config: document.getElementById('proj_conn_config'),
     };
 

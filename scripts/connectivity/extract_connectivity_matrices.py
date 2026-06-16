@@ -580,7 +580,6 @@ class ConnectivityExtractor:
             f'--connectivity={atlas}',
             f'--connectivity_value={",".join(self.config["connectivity_values"])}',
             f'--connectivity_type={self.config["connectivity_options"]["connectivity_type"]}',
-            f'--connectivity_threshold={self.config["connectivity_options"]["connectivity_threshold"]}',
             f'--connectivity_output={self.config["connectivity_options"]["connectivity_output"]}',
             f'--thread_count={self.config["thread_count"]}',
             f'--output={output_prefix}.tt.gz',
@@ -1001,61 +1000,72 @@ if __name__ == "__main__":
         try:
             # Load .mat file
             mat_data = scipy.io.loadmat(str(mat_file_path))
-            
-            # Find the connectivity matrix (common keys: 'connectivity', 'matrix', 'data')
-            connectivity_key = None
-            for key in ['connectivity', 'matrix', 'data']:
-                if key in mat_data:
-                    connectivity_key = key
-                    break
-            
-            if connectivity_key is None:
-                # List available keys for debugging
+
+            def write_matrix_csv(matrix, suffix_tag: str, key_used: str) -> Dict[str, str]:
+                if 'labels' in mat_data:
+                    labels = [str(label[0]) if hasattr(label, '__getitem__') else str(label)
+                             for label in mat_data['labels'].flatten()]
+                    if len(labels) == matrix.shape[0]:
+                        df = pd.DataFrame(matrix, index=labels, columns=labels)
+                    else:
+                        df = pd.DataFrame(matrix)
+                else:
+                    n_regions = matrix.shape[0]
+                    region_names = [f'{atlas}_region_{i+1:03d}' for i in range(n_regions)]
+                    df = pd.DataFrame(matrix, index=region_names, columns=region_names)
+
+                base = mat_file_path.with_suffix('')
+                csv_path = base.with_name(f'{base.name}{suffix_tag}.csv')
+                simple_csv_path = base.with_name(f'{base.name}{suffix_tag}.simple.csv')
+                df.to_csv(csv_path, index=True)
+                np.savetxt(simple_csv_path, matrix, delimiter=',', fmt='%.6f')
+                return {
+                    'csv_path': str(csv_path),
+                    'simple_csv_path': str(simple_csv_path),
+                    'matrix_shape': matrix.shape,
+                    'connectivity_key': key_used
+                }
+
+            # Legacy DSI Studio format: one matrix under a simple key
+            legacy_key = next((k for k in ('connectivity', 'matrix', 'data') if k in mat_data), None)
+            if legacy_key is not None:
+                connectivity_matrix = mat_data[legacy_key]
+                if connectivity_matrix.ndim != 2:
+                    return {'success': False, 'error': f'Unexpected matrix dimensions: {connectivity_matrix.shape}'}
+                result = write_matrix_csv(connectivity_matrix, '', legacy_key)
+                return {'success': True, **result}
+
+            # Newer DSI Studio builds (2025.04.16+) bundle every metric into one .mat
+            # file as "<metric> r2r" (region-to-region NxN matrix) plus a "<metric> t2r"
+            # per-region column we don't want. Auto-discover the r2r matrices instead of
+            # relying on a fixed key name.
+            r2r_keys = [k for k in mat_data.keys()
+                       if k.endswith(' r2r') and getattr(mat_data[k], 'ndim', 0) == 2
+                       and mat_data[k].shape[0] == mat_data[k].shape[1]]
+
+            if not r2r_keys:
                 available_keys = [k for k in mat_data.keys() if not k.startswith('__')]
                 self.logger.warning(f"No standard connectivity key found in {mat_file_path.name}")
                 self.logger.warning(f"Available keys: {available_keys}")
-                # Use the first non-metadata key
-                if available_keys:
-                    connectivity_key = available_keys[0]
-                else:
-                    return {'success': False, 'error': 'No data found in .mat file'}
-            
-            connectivity_matrix = mat_data[connectivity_key]
-            
-            # Convert to DataFrame for better CSV output
-            if connectivity_matrix.ndim == 2:
-                # Create meaningful row/column names if available
-                if 'labels' in mat_data:
-                    labels = [str(label[0]) if hasattr(label, '__getitem__') else str(label) 
-                             for label in mat_data['labels'].flatten()]
-                    if len(labels) == connectivity_matrix.shape[0]:
-                        df = pd.DataFrame(connectivity_matrix, index=labels, columns=labels)
-                    else:
-                        df = pd.DataFrame(connectivity_matrix)
-                else:
-                    # Use generic row/column names
-                    n_regions = connectivity_matrix.shape[0]
-                    region_names = [f'{atlas}_region_{i+1:03d}' for i in range(n_regions)]
-                    df = pd.DataFrame(connectivity_matrix, index=region_names, columns=region_names)
-                
-                # Save as CSV
-                csv_path = mat_file_path.with_suffix('.csv')
-                df.to_csv(csv_path, index=True)
-                
-                # Also save a simplified version without row names for easy loading
-                simple_csv_path = mat_file_path.with_suffix('.simple.csv')
-                np.savetxt(simple_csv_path, connectivity_matrix, delimiter=',', fmt='%.6f')
-                
-                return {
-                    'success': True,
-                    'csv_path': str(csv_path),
-                    'simple_csv_path': str(simple_csv_path),
-                    'matrix_shape': connectivity_matrix.shape,
-                    'connectivity_key': connectivity_key
-                }
-            else:
-                return {'success': False, 'error': f'Unexpected matrix dimensions: {connectivity_matrix.shape}'}
-                
+                return {'success': False, 'error': 'No region-to-region connectivity matrix found in .mat file'}
+
+            metrics_written = {}
+            for key in r2r_keys:
+                metric_name = key[:-len(' r2r')]
+                safe_tag = '.' + metric_name.replace(' ', '_').replace('/', '_')
+                metrics_written[metric_name] = write_matrix_csv(mat_data[key], safe_tag, key)
+
+            # Keep top-level csv_path/simple_csv_path pointing at the first metric for
+            # callers that only look at a single result, plus the full per-metric map.
+            first = next(iter(metrics_written.values()))
+            return {
+                'success': True,
+                'csv_path': first['csv_path'],
+                'simple_csv_path': first['simple_csv_path'],
+                'matrix_shape': first['matrix_shape'],
+                'metrics': metrics_written
+            }
+
         except Exception as e:
             self.logger.error(f"Failed to convert {mat_file_path.name} to CSV: {str(e)}")
             return {'success': False, 'error': str(e)}

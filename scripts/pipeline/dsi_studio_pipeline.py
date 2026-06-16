@@ -26,9 +26,12 @@ import random
 import gzip
 import shutil
 import csv
+import json
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple, Dict
+
+DEFAULT_APPTAINER_IMAGES_DIR = Path("/data/local/software/apptainer_images")
 
 class ColoredFormatter(logging.Formatter):
     """Custom formatter with colors for terminal output"""
@@ -73,13 +76,37 @@ class DSIStudioPipeline:
     def __init__(self, args):
         self.qsiprep_dir = Path(args.qsiprep_dir).resolve()
         self.output_dir = Path(args.output_dir).resolve()
-        
+
+        # BIDS-style project root: explicit --project_root wins; otherwise infer
+        # from the common "<dataset>/derivatives/<pipeline>" layout, falling back
+        # to the output dir's parent if that layout isn't detected.
+        if args.project_root:
+            self.project_root = Path(args.project_root).resolve()
+        elif self.output_dir.parent.name == "derivatives":
+            self.project_root = self.output_dir.parent.parent
+        else:
+            self.project_root = self.output_dir.parent
+        self.code_dir = self.project_root / "code" / "dsistudio"
+        self.code_dir.mkdir(parents=True, exist_ok=True)
+
         # Set DSI Studio command path
         if args.dsi_studio_path:
             self.dsi_studio_cmd = str(Path(args.dsi_studio_path) / "dsi_studio")
         else:
             self.dsi_studio_cmd = args.dsi_studio_cmd
-            
+
+        # Atlas presence checks need a real DSI Studio install directory even
+        # when --apptainer swaps self.dsi_studio_cmd for the container wrapper.
+        self.atlas_reference_dir = Path(self.dsi_studio_cmd).parent
+
+        self.use_apptainer = args.apptainer
+        self._apptainer_image_arg = args.apptainer_image
+        if self.use_apptainer:
+            wrapper = Path(__file__).resolve().parents[2] / "installation" / "apptainer" / "run_dsi_studio.sh"
+            self.dsi_studio_cmd = str(wrapper)
+            if args.apptainer_bind:
+                os.environ["DSI_APPTAINER_BIND"] = args.apptainer_bind
+
         self.method = args.method
         self.param0 = args.param0
         self.threads = args.threads
@@ -126,6 +153,9 @@ class DSIStudioPipeline:
         self.logger.info(f"Starting DSI Studio Pipeline")
         self.logger.info(f"QSIPREP Dir: {self.qsiprep_dir}")
         self.logger.info(f"Output Dir: {self.output_dir}")
+
+        if self.use_apptainer:
+            self._resolve_apptainer_image(self._apptainer_image_arg)
 
         self._validate_dsi_studio()
         self._check_cuda_status()
@@ -177,6 +207,66 @@ class DSIStudioPipeline:
             self.logger.warning("nvidia-smi not found; skipping CUDA check.")
         except Exception as e:
             self.logger.warning(f"CUDA check encountered an issue: {e}")
+
+    def _resolve_apptainer_image(self, explicit_image: Optional[str]):
+        """Pick which Apptainer image this project uses, and pin it.
+
+        A project (output_dir) is pinned to the exact image it first ran with,
+        so re-running it later never silently picks up a newer DSI Studio
+        build (the Mar->Jun build regression is exactly the failure mode this
+        avoids). A brand-new project pins whatever 'latest' resolves to right
+        now. Passing --apptainer_image explicitly is a deliberate version
+        change and updates the pin. Either way, if a newer build than the
+        pinned one is available, we log a one-line notice but never switch
+        automatically.
+        """
+        pin_file = self.code_dir / "dsi_studio_image.json"
+        latest_link = DEFAULT_APPTAINER_IMAGES_DIR / "dsi_studio_latest.sif"
+        latest_target = latest_link.resolve() if latest_link.exists() else None
+
+        pinned_image = None
+        if pin_file.exists():
+            try:
+                data = json.loads(pin_file.read_text())
+                candidate = Path(data.get("image", ""))
+                if candidate.exists():
+                    pinned_image = candidate
+            except Exception as e:
+                self.logger.warning(f"Could not read {pin_file}: {e}")
+
+        if explicit_image:
+            chosen = Path(explicit_image).resolve()
+            if not chosen.exists():
+                self.logger.warning(f"--apptainer_image not found: {chosen}")
+            if pinned_image and chosen != pinned_image:
+                self.logger.info(f"Switching this project's pinned DSI Studio image: {pinned_image.name} -> {chosen.name}")
+            pinned_image = chosen
+        elif pinned_image is None:
+            if latest_target is None:
+                raise RuntimeError(
+                    "No Apptainer image found. Build one with installation/apptainer/build_image.sh"
+                )
+            pinned_image = latest_target
+            self.logger.info(f"New project: pinning DSI Studio image to {pinned_image.name}")
+        else:
+            self.logger.info(f"Project pinned to DSI Studio image: {pinned_image.name}")
+
+        try:
+            pin_file.write_text(json.dumps({
+                "image": str(pinned_image),
+                "pinned_at": datetime.now().isoformat(),
+            }, indent=2))
+        except Exception as e:
+            self.logger.warning(f"Could not write {pin_file}: {e}")
+
+        if latest_target and latest_target != pinned_image:
+            self.logger.info(
+                f"Note: a newer DSI Studio build is available ({latest_target.name}) "
+                f"but this project stays on {pinned_image.name}. "
+                f"Re-run with --apptainer_image to upgrade deliberately."
+            )
+
+        os.environ["DSI_APPTAINER_IMAGE"] = str(pinned_image)
 
     def _should_force(self, component: str) -> bool:
         """Check if a specific component should be force-regenerated.
@@ -573,8 +663,9 @@ class DSIStudioPipeline:
             "--action=rec",
             f"--source={src_file}",
             f"--method={self.method}",
-            f"--param0={self.param0}",
+            f"--param={self.param0}",
             f"--thread_count={self.threads}",
+            '--cmd=[Step T2][B-table][flip by]',
             "--other_output=all"
         ]
         
@@ -678,9 +769,10 @@ class DSIStudioPipeline:
                     self.logger.warning("No atlases specified in connectivity config")
                     return True
                 
-                # Check if atlases exist in DSI Studio
-                dsi_studio_path = Path(self.dsi_studio_cmd).parent
-                atlas_dir = dsi_studio_path / "atlas" / "human"
+                # Check if atlases exist in DSI Studio (use the real install dir for
+                # this check even in --apptainer mode, since dsi_studio_cmd then
+                # points at the container wrapper script, not an actual install).
+                atlas_dir = self.atlas_reference_dir / "atlas" / "human"
                 if not atlas_dir.exists():
                     self.logger.warning(f"DSI Studio atlas directory not found: {atlas_dir}")
                     return True
@@ -1087,8 +1179,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DSI Studio Preprocessing Pipeline")
     parser.add_argument("--qsiprep_dir", required=True, help="Path to qsiprep output directory")
     parser.add_argument("--output_dir", required=True, help="Path to output directory")
+    parser.add_argument("--project_root", help="BIDS-style dataset root (default: inferred from output_dir, e.g. <root>/derivatives/<pipeline> -> <root>). Project-level state (like the Apptainer image pin) lives under <project_root>/code/dsistudio/")
     parser.add_argument("--dsi_studio_cmd", default="/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio", help="Path to dsi_studio executable")
     parser.add_argument("--dsi_studio_path", help="Path to DSI Studio installation folder (containing dsi_studio executable)")
+    parser.add_argument("--apptainer", action="store_true", help="Run DSI Studio via the GPU-capable Apptainer image instead of a bare-metal install (see installation/apptainer/)")
+    parser.add_argument("--apptainer_image", help="Path to a specific .sif image (default: installation/apptainer's dsi_studio_latest.sif)")
+    parser.add_argument("--apptainer_bind", help="Extra bind path(s) for the container (default: /data/local)")
     parser.add_argument("--method", default="4", help="Reconstruction method (4=GQI, 7=QSDR)")
     parser.add_argument("--param0", default="1.25", help="Diffusion sampling length ratio")
     parser.add_argument("--threads", default="8", help="Number of threads")

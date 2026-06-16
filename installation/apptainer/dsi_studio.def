@@ -1,0 +1,57 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    maintainer dsistuido project
+    source https://github.com/frankyeh/DSI-Studio
+    note Wraps the official prebuilt Linux release asset (CUDA-enabled), not the
+    note CPU-only dsistudio/dsistudio Docker Hub image. Base OS matches the host's
+    note glibc so --nv/--nvccli GPU passthrough works without symbol mismatches.
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl unzip \
+        libb2-1 libbrotli1 libbsd0 libdeflate0 libdouble-conversion3 libegl1 \
+        libfontconfig1 libfreetype6 libgcrypt20 libgl1-mesa-dri libglib2.0-0 \
+        libglvnd0 libglx0 libgraphite2-3 libgssapi-krb5-2 libharfbuzz0b libice6 \
+        libicu70 libjbig0 libjpeg-turbo8 libk5crypto3 libkrb5-3 libkrb5support0 \
+        liblcms2-2 liblz4-1 libmd0 libmd4c0 libmng2 libopengl0 libpcre2-16-0 \
+        libpng16-16 libproxy1v5 libqt6core6 libqt6dbus6 libqt6gui6 libqt6network6 \
+        libqt6openglwidgets6 libqt6widgets6 libsm6 libsystemd0 libtiff5 libuuid1 \
+        libwebp7 libwebpdemux2 libwebpmux3 libx11-6 libx11-xcb1 libxau6 \
+        libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+        libxcb-render0 libxcb-render-util0 libxcb-shape0 libxcb-shm0 \
+        libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xinput0 libxcb-xkb1 \
+        libxdmcp6 libxkbcommon0 libxkbcommon-x11-0 libzstd1 \
+        qt6-image-formats-plugins qt6-qpa-plugins
+    rm -rf /var/lib/apt/lists/*
+
+    # Always fetches whatever GitHub currently serves as the latest release asset,
+    # so rebuilding this image later picks up the maintainer's newest build.
+    ASSET_URL="https://github.com/frankyeh/DSI-Studio/releases/latest/download/dsi_studio_ubuntu2204.zip"
+    curl -fL --retry 5 --retry-delay 2 -o /tmp/dsi_studio.zip "$ASSET_URL"
+    mkdir -p /opt/dsi-studio
+    unzip -q /tmp/dsi_studio.zip -d /opt/dsi-studio_extracted
+    # The zip wraps everything in a single top-level dir; flatten it.
+    inner_dir=$(find /opt/dsi-studio_extracted -mindepth 1 -maxdepth 1 -type d | head -1)
+    mv "$inner_dir"/* /opt/dsi-studio/
+    rm -rf /opt/dsi-studio_extracted /tmp/dsi_studio.zip
+    chmod +x /opt/dsi-studio/dsi_studio
+
+    # Record the exact build the image was pinned to, for later inspection.
+    /opt/dsi-studio/dsi_studio --version > /opt/dsi-studio/BUILD_INFO.txt 2>&1 || true
+    cat /opt/dsi-studio/BUILD_INFO.txt
+
+%environment
+    export PATH=/opt/dsi-studio:$PATH
+    export LD_LIBRARY_PATH=/opt/dsi-studio/lib:${LD_LIBRARY_PATH:-}
+
+%runscript
+    exec /opt/dsi-studio/dsi_studio "$@"
+
+%test
+    /opt/dsi-studio/dsi_studio --version

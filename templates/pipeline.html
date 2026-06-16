@@ -38,19 +38,22 @@
                 </div>
             </div>
 
-            <div class="col-md-6">
-                <label class="form-label">DSI Studio command</label>
+            <input type="hidden" id="p_project_root">
+
+            <div class="col-md-3 form-check pt-4">
+                <input class="form-check-input" type="checkbox" id="p_apptainer" checked>
+                <label class="form-check-label" for="p_apptainer">Use Apptainer (GPU container)</label>
+            </div>
+            <div class="col-md-5">
+                <label class="form-label">Apptainer image (optional)</label>
                 <div class="input-group path-picker-group" data-picker-mode="file">
-                    <input class="form-control" id="p_dsi_cmd" placeholder="/data/local/software/dsi-studio/dsi_studio" />
+                    <input class="form-control" id="p_apptainer_image" placeholder="installation/apptainer's dsi_studio_latest.sif" />
                     <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
                 </div>
             </div>
-            <div class="col-md-6">
-                <label class="form-label">DSI Studio folder (optional)</label>
-                <div class="input-group path-picker-group" data-picker-mode="dir">
-                    <input class="form-control" id="p_dsi_path" placeholder="/data/local/software/dsi-studio" />
-                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
-                </div>
+            <div class="col-md-4">
+                <label class="form-label">Apptainer bind path (optional)</label>
+                <input class="form-control" id="p_apptainer_bind" placeholder="/data/local" />
             </div>
 
             <div class="col-md-4">
@@ -67,6 +70,18 @@
             <div class="col-md-4">
                 <label class="form-label">Threads</label>
                 <input class="form-control" id="p_threads" value="8" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Force regeneration</label>
+                <select class="form-select" id="p_force">
+                    <option value="">(none - respect skip_existing)</option>
+                    <option value="src">src</option>
+                    <option value="fib">fib</option>
+                    <option value="diffs">diffs</option>
+                    <option value="database">database</option>
+                    <option value="all">all</option>
+                </select>
+                <div class="form-text">e.g. "fib" rebuilds FIB files only and leaves existing SRC files untouched.</div>
             </div>
 
             <div class="col-md-6">
@@ -141,11 +156,14 @@
         return {
             qsiprep_dir: value('p_qsiprep'),
             output_dir: value('p_output'),
-            dsi_studio_cmd: value('p_dsi_cmd'),
-            dsi_studio_path: value('p_dsi_path'),
+            project_root: value('p_project_root'),
+            apptainer: checked('p_apptainer'),
+            apptainer_image: value('p_apptainer_image'),
+            apptainer_bind: value('p_apptainer_bind'),
             method: value('p_method'),
             param0: value('p_param0'),
             threads: value('p_threads'),
+            force: value('p_force'),
             rawdata_dir: value('p_rawdata'),
             db_name: value('p_db_name'),
             min_file_age: value('p_min_file_age'),
@@ -167,11 +185,13 @@
         const mapping = {
             p_qsiprep: 'qsiprep_dir',
             p_output: 'output_dir',
-            p_dsi_cmd: 'dsi_studio_cmd',
-            p_dsi_path: 'dsi_studio_path',
+            p_project_root: 'project_root',
+            p_apptainer_image: 'apptainer_image',
+            p_apptainer_bind: 'apptainer_bind',
             p_method: 'method',
             p_param0: 'param0',
             p_threads: 'threads',
+            p_force: 'force',
             p_rawdata: 'rawdata_dir',
             p_db_name: 'db_name',
             p_min_file_age: 'min_file_age',
@@ -184,7 +204,7 @@
             if (data[key] !== undefined && data[key] !== null) document.getElementById(id).value = data[key];
         });
 
-        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity'].forEach(k => {
+        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity','apptainer'].forEach(k => {
             const el = document.getElementById('p_' + k);
             if (el && data[k] !== undefined) el.checked = Boolean(data[k]);
         });
@@ -200,7 +220,7 @@
                 qsiprep_dir: payload.qsiprep_dir,
                 output_dir: payload.output_dir,
                 rawdata_dir: payload.rawdata_dir,
-                dsi_studio_cmd: payload.dsi_studio_cmd,
+                project_root: payload.project_root,
                 connectivity_config: payload.connectivity_config,
             };
             window.dsiUi.setCurrentProject(currentProject);
@@ -259,7 +279,7 @@
             qsiprep_dir: p.qsiprep_dir,
             output_dir: p.output_dir,
             rawdata_dir: p.rawdata_dir,
-            dsi_studio_cmd: p.dsi_studio_cmd,
+            project_root: p.project_root,
             connectivity_config: p.connectivity_config,
         });
     }
