@@ -99,8 +99,10 @@ class DSIStudioPipeline:
         # when --apptainer swaps self.dsi_studio_cmd for the container wrapper.
         self.atlas_reference_dir = Path(self.dsi_studio_cmd).parent
 
-        self.use_apptainer = args.apptainer
+        self.use_datalad = args.datalad
+        self.use_apptainer = args.apptainer or self.use_datalad  # datalad containers-run needs a registered container
         self._apptainer_image_arg = args.apptainer_image
+        self.container_name = "dsi-studio"
         if self.use_apptainer:
             wrapper = Path(__file__).resolve().parents[2] / "installation" / "apptainer" / "run_dsi_studio.sh"
             self.dsi_studio_cmd = str(wrapper)
@@ -154,8 +156,13 @@ class DSIStudioPipeline:
         self.logger.info(f"QSIPREP Dir: {self.qsiprep_dir}")
         self.logger.info(f"Output Dir: {self.output_dir}")
 
+        pin_file_preexisted = (self.code_dir / "dsi_studio_image.json").exists()
+
         if self.use_apptainer:
             self._resolve_apptainer_image(self._apptainer_image_arg)
+
+        if self.use_datalad:
+            self._setup_datalad_superdataset(pin_file_preexisted)
 
         self._validate_dsi_studio()
         self._check_cuda_status()
@@ -266,7 +273,126 @@ class DSIStudioPipeline:
                 f"Re-run with --apptainer_image to upgrade deliberately."
             )
 
+        self.apptainer_image_path = pinned_image
         os.environ["DSI_APPTAINER_IMAGE"] = str(pinned_image)
+
+    def _setup_datalad_superdataset(self, pin_file_preexisted: bool):
+        """Make project_root a DataLad superdataset and register the pinned
+        container in it, so every dsi_studio call can be run through
+        `datalad containers-run` for full command/provenance tracking.
+
+        Only bootstraps brand-new projects. If this project already has a
+        version pin from a prior (non-DataLad) run, we don't retroactively
+        convert it - that's a deliberate, separate decision, not a side
+        effect of turning this flag on.
+        """
+        datalad_dir = self.project_root / ".datalad"
+        if pin_file_preexisted and not datalad_dir.exists():
+            self.logger.warning(
+                f"{self.project_root} was already used without DataLad tracking; "
+                f"not retroactively converting it. Continuing without DataLad for this run."
+            )
+            self.use_datalad = False
+            return
+
+        if not datalad_dir.exists():
+            self.logger.info(f"Initializing DataLad superdataset at {self.project_root}")
+            result = subprocess.run(
+                ["datalad", "create", "--force", "-c", "text2git", str(self.project_root)],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                self.logger.error(f"datalad create failed: {result.stderr.strip()}")
+                self.use_datalad = False
+                return
+
+        self._register_datalad_container(self.project_root)
+
+    def _register_datalad_container(self, dataset_dir: Path):
+        """Register the pinned Apptainer image in a dataset via a symlink,
+        not DataLad's default copy-into-dataset behavior - the image is a
+        few hundred MB and shared across every project; copying it into
+        each project's dataset would duplicate that on disk per project.
+        """
+        env_dir = dataset_dir / ".datalad" / "environments" / self.container_name
+        image_link = env_dir / "image"
+        env_dir.mkdir(parents=True, exist_ok=True)
+
+        needs_save = False
+        already_correct = image_link.is_symlink() and image_link.resolve() == self.apptainer_image_path
+        if not already_correct:
+            if image_link.exists() or image_link.is_symlink():
+                image_link.unlink()
+            image_link.symlink_to(self.apptainer_image_path)
+            subprocess.run(
+                ["git", "-C", str(dataset_dir), "add", str(image_link.relative_to(dataset_dir))],
+                capture_output=True, text=True
+            )
+            needs_save = True
+
+        call_fmt = "apptainer exec --userns --nvccli -B /data/local {img} {cmd}"
+        rel_image = str(image_link.relative_to(dataset_dir))
+        for key, value in [
+            (f"datalad.containers.{self.container_name}.image", rel_image),
+            (f"datalad.containers.{self.container_name}.cmdexec", call_fmt),
+        ]:
+            result = subprocess.run(
+                ["datalad", "configuration", "--dataset", str(dataset_dir), "--scope", "branch",
+                 "set", f"{key}={value}"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                self.logger.warning(f"Could not set {key}: {result.stderr.strip()}")
+            else:
+                needs_save = True
+
+        if needs_save:
+            subprocess.run(
+                ["datalad", "save", "-d", str(dataset_dir), "-m", f"Register {self.container_name} container"],
+                capture_output=True, text=True
+            )
+
+    def _ensure_subject_dataset(self, subject_id: str) -> Path:
+        """Return the nested DataLad dataset for one subject, creating it as
+        a proper nested dataset of the project superdataset and registering
+        the container in it on first use.
+        """
+        subject_dir = self.output_dir / subject_id
+        if not (subject_dir / ".datalad").exists():
+            self.logger.info(f"Creating nested DataLad dataset for {subject_id}")
+            result = subprocess.run(
+                ["datalad", "create", "-d", str(self.project_root), str(subject_dir)],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                self.logger.error(f"datalad create for {subject_id} failed: {result.stderr.strip()}")
+        self._register_datalad_container(subject_dir)
+        return subject_dir
+
+    def _datalad_run(self, dataset_dir: Path, dsi_args: List[str], output_glob: str, message: str) -> bool:
+        """Run a dsi_studio call via `datalad containers-run` so it's recorded
+        as a single, replayable commit - the exact command, container, exit
+        code, and declared outputs all end up in the commit message, and
+        `datalad rerun <commit>` replays it later.
+        """
+        if self.dry_run:
+            self.logger.info(f"[dry-run] datalad containers-run -d {dataset_dir} -- dsi_studio {' '.join(dsi_args)}")
+            return True
+        cmd = [
+            "datalad", "containers-run",
+            "-d", str(dataset_dir),
+            "-n", self.container_name,
+            "--explicit", "--expand", "outputs",
+            "-o", output_glob,
+            "-m", message,
+            "--", "dsi_studio",
+        ] + dsi_args
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(dataset_dir))
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip()
+            self.logger.error(f"datalad containers-run failed: {err[-2000:]}")
+            return False
+        return True
 
     def _should_force(self, component: str) -> bool:
         """Check if a specific component should be force-regenerated.
@@ -350,11 +476,11 @@ class DSIStudioPipeline:
             self.logger.error(f"Failed to decompress {zipped_path}: {exc}")
             return None
 
-    def _collect_reconstruction_outputs(self, src_file: Path) -> List[Path]:
+    def _collect_reconstruction_outputs(self, src_file: Path, search_dir: Optional[Path] = None) -> List[Path]:
         """Gather reconstructed delta outputs (.fib or .odf) and decompress .sz archives."""
         outputs = []
         prefix = src_file.name.split(".src")[0]
-        parent = src_file.parent
+        parent = search_dir if search_dir is not None else src_file.parent
         patterns = [f"{prefix}*.fib.gz", f"{prefix}*.odf.*"]
 
         for pattern in patterns:
@@ -561,18 +687,24 @@ class DSIStudioPipeline:
             session_id = "_" + dwi_file.name.split('_')[1]
         
         base_id = f"{subject_id}{session_id}"
-        
+
         bval_file = dwi_file.with_suffix('').with_suffix('').with_suffix('.bval')
         bvec_file = dwi_file.with_suffix('').with_suffix('').with_suffix('.bvec')
-        
+
         if not bval_file.exists() or not bvec_file.exists():
             self.logger.warning(f"Missing bval/bvec for {dwi_file.name}, skipping.")
             return None
 
-        output_src = self.src_dir / f"{base_id}.src.gz"
-        
-        cmd = [
-            self.dsi_studio_cmd,
+        if self.use_datalad:
+            subject_dir = self._ensure_subject_dataset(subject_id)
+            src_subdir = subject_dir / "src"
+            src_subdir.mkdir(parents=True, exist_ok=True)
+        else:
+            subject_dir = None
+            src_subdir = self.src_dir
+        output_src = src_subdir / f"{base_id}.src.gz"
+
+        dsi_args = [
             "--action=src",
             f"--source={dwi_file}",
             f"--bval={bval_file}",
@@ -584,13 +716,13 @@ class DSIStudioPipeline:
         anat_dir = dwi_file.parents[1] / "anat"
         t1w_files = list(anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz"))
         if t1w_files:
-            cmd.append(f"--t1w={t1w_files[0]}")
+            dsi_args.append(f"--t1w={t1w_files[0]}")
             self.logger.info(f"Found T1w for {base_id}: {t1w_files[0].name}")
 
         # Try to find mask
         mask_files = list(dwi_file.parent.glob(f"{base_id}*_desc-brain_mask.nii.gz"))
         if mask_files:
-            cmd.append(f"--mask={mask_files[0]}")
+            dsi_args.append(f"--mask={mask_files[0]}")
             self.logger.info(f"Found mask for {base_id}: {mask_files[0].name}")
         elif self.require_mask:
             self.logger.warning(f"Missing mask for {base_id}; skipping due to --require-mask")
@@ -599,19 +731,25 @@ class DSIStudioPipeline:
         if self.require_t1w and not t1w_files:
             self.logger.warning(f"Missing T1w for {base_id}; skipping due to --require-t1w")
             return None
-        
+
         # Check for existing SRC (could be .src.gz or .src.gz.sz)
         src_exists = output_src.exists() or Path(f"{output_src}.sz").exists()
         actual_src = output_src if output_src.exists() else Path(f"{output_src}.sz") if Path(f"{output_src}.sz").exists() else None
-        
+
         if src_exists and self.skip_existing and not self._should_force('src'):
             self.logger.info(f"SRC exists, skipping generation: {actual_src.name if actual_src else output_src.name}")
             return actual_src or output_src
         elif src_exists and self._should_force('src'):
             self.logger.info(f"SRC exists but --force src is set, will overwrite: {actual_src.name if actual_src else output_src.name}")
 
-        self.logger.info(f"Running: {' '.join(cmd)}")
-        if self.run_command(cmd):
+        if self.use_datalad:
+            success = self._datalad_run(subject_dir, dsi_args, f"src/{base_id}.src.gz*", f"src: {base_id}")
+        else:
+            cmd = [self.dsi_studio_cmd] + dsi_args
+            self.logger.info(f"Running: {' '.join(cmd)}")
+            success = self.run_command(cmd)
+
+        if success:
             # DSI Studio may create .src.gz.sz instead of .src.gz
             if not output_src.exists():
                 zipped_src = Path(f"{output_src}.sz")
@@ -627,6 +765,7 @@ class DSIStudioPipeline:
     def reconstruct_fib(self, src_file: Path):
         """Reconstruct FIB file from SRC"""
         subject_prefix = src_file.name.split('.src')[0]
+        subject_id = subject_prefix.split('_')[0]
 
         # Check for method-specific existing FIB files
         # FIB files: modern format is .fz (not .gz or .sz)
@@ -635,16 +774,24 @@ class DSIStudioPipeline:
             '4': ['.odf.gqi.fz'],  # GQI (method 4)
             '7': ['.odf.qsdr.fz'],  # QSDR (method 7)
         }
-        
+
         method_key = str(self.method) if self.method else '4'
         expected_suffixes = method_suffixes.get(method_key, ['*'])
-        
+
+        if self.use_datalad:
+            subject_dir = self._ensure_subject_dataset(subject_id)
+            fib_subdir = subject_dir / "fib"
+            fib_subdir.mkdir(parents=True, exist_ok=True)
+        else:
+            subject_dir = None
+            fib_subdir = self.fib_dir
+
         existing_fib = []
         for suffix in expected_suffixes:
             pattern = f"{subject_prefix}{suffix}"
-            matches = list(self.fib_dir.glob(pattern))
+            matches = list(fib_subdir.glob(pattern))
             existing_fib.extend(matches)
-        
+
         if existing_fib and self.skip_existing and not self._should_force('fib'):
             self.logger.info(f"FIB (method {self.method}) exists, skipping: {existing_fib[0].name}")
             self.stats["skipped_existing"] += 1
@@ -653,13 +800,12 @@ class DSIStudioPipeline:
             self.logger.info(f"FIB (method {self.method}) exists but --force fib is set, will overwrite: {existing_fib[0].name}")
         elif self.skip_existing:
             # Check if other method files exist (but requested method doesn't)
-            all_fibs = list(self.fib_dir.glob(f"{subject_prefix}*"))
+            all_fibs = list(fib_subdir.glob(f"{subject_prefix}*"))
             other_method_fibs = [f for f in all_fibs if f not in existing_fib]
             if other_method_fibs:
                 self.logger.info(f"Found {len(other_method_fibs)} FIB(s) with different method, generating method {self.method}: {other_method_fibs[0].name}")
 
-        cmd = [
-            self.dsi_studio_cmd,
+        dsi_args = [
             "--action=rec",
             f"--source={src_file}",
             f"--method={self.method}",
@@ -668,7 +814,28 @@ class DSIStudioPipeline:
             '--cmd=[Step T2][B-table][flip by]',
             "--other_output=all"
         ]
-        
+
+        if self.use_datalad:
+            # Write directly into this subject's fib/ subdir instead of next to
+            # the SRC file, so the declared datalad output and the final
+            # location are the same path - no separate move step afterward.
+            dsi_args.append(f"--output={fib_subdir / subject_prefix}")
+            success = self._datalad_run(subject_dir, dsi_args, f"fib/{subject_prefix}*", f"rec: {subject_prefix} method={self.method}")
+            if success:
+                generated_fib = self._collect_reconstruction_outputs(src_file, search_dir=fib_subdir)
+                for dest in generated_fib:
+                    validation = self.validate_fib_file(dest)
+                    if validation["valid"]:
+                        self.logger.info(f"✓ FIB validated: {dest.name} ({validation['size_mb']} MB, metrics: {len(validation['metrics_found'])})")
+                        self.stats["fib_ok"] += 1
+                    else:
+                        self.logger.warning(f"✗ FIB validation failed: {dest.name}")
+                        for error in validation["errors"]:
+                            self.logger.warning(f"  → {error}")
+                return generated_fib[0] if generated_fib else None
+            return None
+
+        cmd = [self.dsi_studio_cmd] + dsi_args
         self.logger.info(f"Running: {' '.join(cmd)}")
         if self.run_command(cmd):
             generated_fib = self._collect_reconstruction_outputs(src_file)
@@ -703,8 +870,13 @@ class DSIStudioPipeline:
             return None
 
         output_name = f"{sub_f}_{ses_f}_minus_{ses_b}.fib.gz"
-        output_path = self.diff_dir / output_name
-        
+        if self.use_datalad:
+            diff_subdir = self._ensure_subject_dataset(sub_f) / "diff"
+            diff_subdir.mkdir(parents=True, exist_ok=True)
+        else:
+            diff_subdir = self.diff_dir
+        output_path = diff_subdir / output_name
+
         if output_path.exists() and self.skip_existing and not self._should_force('diffs'):
             # Check if file has content (not 0 bytes from previous failed attempt)
             if output_path.stat().st_size > 0:
@@ -731,6 +903,14 @@ class DSIStudioPipeline:
         if self.run_command(cmd):
             # Verify output file was created and has content
             if output_path.exists() and output_path.stat().st_size > 0:
+                if self.use_datalad and not self.dry_run:
+                    # This goes through create_differential_fib.py rather than
+                    # dsi_studio directly, so it isn't a containers-run record -
+                    # just commit the resulting file so the dataset stays clean.
+                    subprocess.run(
+                        ["datalad", "save", "-d", str(self.project_root), "-m", f"diff: {output_name}"],
+                        capture_output=True, text=True
+                    )
                 return output_path
             else:
                 self.logger.error(f"Differential FIB creation failed or produced empty file: {output_path}")
@@ -870,18 +1050,25 @@ class DSIStudioPipeline:
             output_db = self.output_dir / self.db_name
         
         fib_list = ",".join([str(f) for f in valid_fibs])
-        
-        cmd = [
-            self.dsi_studio_cmd,
+
+        dsi_args = [
             "--action=db",
             f"--source={fib_list}",
             f"--output={output_db}"
         ]
 
         if index_name:
-            cmd.append(f"--index_name={index_name}")
-        
-        self.run_command(cmd)
+            dsi_args.append(f"--index_name={index_name}")
+
+        if self.use_datalad:
+            # Spans multiple subjects' FIBs, so this is a project-level
+            # (superdataset) artifact rather than something owned by one
+            # subject's nested dataset.
+            rel_output = output_db.relative_to(self.project_root)
+            self._datalad_run(self.project_root, dsi_args, str(rel_output), f"db: {output_db.name}")
+        else:
+            cmd = [self.dsi_studio_cmd] + dsi_args
+            self.run_command(cmd)
         self.logger.info(f"Database created at {output_db}")
 
     def _generate_html_report(self, subject_id: str, sessions: List[Dict]):
@@ -1022,11 +1209,12 @@ class DSIStudioPipeline:
                     }
                     method_key = str(self.method) if self.method else '4'
                     expected_suffixes = method_suffixes.get(method_key, ['*'])
-                    
+                    search_dir = (self.output_dir / dwi_subject_id / "fib") if self.use_datalad else self.fib_dir
+
                     for suffix in expected_suffixes:
                         pattern = f"{subject_prefix}{suffix}"
-                        matches = list(self.fib_dir.glob(pattern))
-                        self.logger.debug(f"Looking for FIB: {pattern} in {self.fib_dir} -> {len(matches)} matches")
+                        matches = list(search_dir.glob(pattern))
+                        self.logger.debug(f"Looking for FIB: {pattern} in {search_dir} -> {len(matches)} matches")
                         if matches:
                             fib = matches[0]
                             fib_files.append(fib)
@@ -1134,6 +1322,13 @@ class DSIStudioPipeline:
         self.print_progress_summary(len(dwi_files), len(dwi_files))
         
         # Build summary with error checking
+        if self.use_datalad and not self.dry_run:
+            self.logger.info("Rolling up subject dataset updates into the project superdataset...")
+            subprocess.run(
+                ["datalad", "save", "-d", str(self.project_root), "-r", "-m", "Update subject datasets for this pipeline run"],
+                capture_output=True, text=True
+            )
+
         summary_lines = [
             "╔══════════════════════════════════════════════════════════════╗",
         ]
@@ -1185,6 +1380,7 @@ if __name__ == "__main__":
     parser.add_argument("--apptainer", action="store_true", help="Run DSI Studio via the GPU-capable Apptainer image instead of a bare-metal install (see installation/apptainer/)")
     parser.add_argument("--apptainer_image", help="Path to a specific .sif image (default: installation/apptainer's dsi_studio_latest.sif)")
     parser.add_argument("--apptainer_bind", help="Extra bind path(s) for the container (default: /data/local)")
+    parser.add_argument("--datalad", action="store_true", help="Run every DSI Studio call via 'datalad containers-run' (implies --apptainer): project_root becomes a DataLad superdataset, each subject a nested dataset, and every SRC/FIB call becomes a single replayable, provenance-recording commit. Only bootstraps brand-new projects.")
     parser.add_argument("--method", default="4", help="Reconstruction method (4=GQI, 7=QSDR)")
     parser.add_argument("--param0", default="1.25", help="Diffusion sampling length ratio")
     parser.add_argument("--threads", default="8", help="Number of threads")

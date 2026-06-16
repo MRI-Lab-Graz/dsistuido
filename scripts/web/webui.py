@@ -310,6 +310,7 @@ def build_pipeline_command(payload: Dict) -> List[str]:
         "dry_run",
         "run_connectivity",
         "apptainer",
+        "datalad",
     ]
     for flag in bool_flags:
         if payload.get(flag):

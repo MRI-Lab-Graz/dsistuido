@@ -56,6 +56,12 @@
                 <input class="form-control" id="p_apptainer_bind" placeholder="/data/local" />
             </div>
 
+            <div class="col-md-12 form-check">
+                <input class="form-check-input" type="checkbox" id="p_datalad" checked>
+                <label class="form-check-label" for="p_datalad">Use DataLad (transparent, reproducible runs)</label>
+                <div class="form-text">Project becomes a DataLad superdataset, each subject a nested dataset; every SRC/FIB/database call is a single replayable, provenance-recording commit. Only bootstraps brand-new projects - existing non-DataLad projects keep running as before.</div>
+            </div>
+
             <div class="col-md-4">
                 <label class="form-label">Method</label>
                 <select class="form-select" id="p_method">
@@ -158,6 +164,7 @@
             output_dir: value('p_output'),
             project_root: value('p_project_root'),
             apptainer: checked('p_apptainer'),
+            datalad: checked('p_datalad'),
             apptainer_image: value('p_apptainer_image'),
             apptainer_bind: value('p_apptainer_bind'),
             method: value('p_method'),
@@ -204,7 +211,7 @@
             if (data[key] !== undefined && data[key] !== null) document.getElementById(id).value = data[key];
         });
 
-        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity','apptainer'].forEach(k => {
+        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity','apptainer','datalad'].forEach(k => {
             const el = document.getElementById('p_' + k);
             if (el && data[k] !== undefined) el.checked = Boolean(data[k]);
         });
