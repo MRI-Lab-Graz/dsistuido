@@ -110,3 +110,5 @@ temp/
 .local/connectometry_simple.json
 interactive_viewer.html
 crea_qa_fa.html
+scripts/web_settings/pipeline*.json
+.gitignore

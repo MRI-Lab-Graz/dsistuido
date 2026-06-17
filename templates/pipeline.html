@@ -90,6 +90,20 @@
                 <div class="form-text">e.g. "fib" rebuilds FIB files only and leaves existing SRC files untouched.</div>
             </div>
 
+            <div class="col-md-4">
+                <label class="form-label">Session</label>
+                <select class="form-select" id="p_session"><option value="all" selected>All sessions</option></select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Acquisition (acq)</label>
+                <select class="form-select" id="p_acq"><option value="all" selected>All</option></select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Space</label>
+                <select class="form-select" id="p_space"><option value="all" selected>All</option></select>
+                <div class="form-text">Detected automatically from the QSIPrep directory above.</div>
+            </div>
+
             <div class="col-md-6">
                 <label class="form-label">BIDS folder (rawdata)</label>
                 <div class="input-group path-picker-group" data-picker-mode="dir">
@@ -145,7 +159,7 @@
             <select class="form-select" id="pipelinePresetSelect" style="max-width: 300px;"></select>
         </div>
 
-        <pre class="mt-3 p-3 bg-dark text-light rounded" id="pipelineResult">Ready.</pre>
+        <div class="mt-3 small text-muted" id="pipelineResult">Ready. Live output appears in "Backend Jobs" below once started.</div>
     </div>
 </div>
 {% endblock %}
@@ -171,6 +185,9 @@
             param0: value('p_param0'),
             threads: value('p_threads'),
             force: value('p_force'),
+            session: value('p_session') || 'all',
+            acq: value('p_acq') || 'all',
+            space: value('p_space') || 'all',
             rawdata_dir: value('p_rawdata'),
             db_name: value('p_db_name'),
             min_file_age: value('p_min_file_age'),
@@ -215,13 +232,55 @@
             const el = document.getElementById('p_' + k);
             if (el && data[k] !== undefined) el.checked = Boolean(data[k]);
         });
+
+        // session/acq/space are <select> elements whose options are filled in
+        // later by refreshBidsEntities() (scanned from the actual qsiprep
+        // dir) - stash the desired value so it can be restored once the
+        // real options exist, instead of setting .value against options
+        // that aren't there yet.
+        ['session', 'acq', 'space'].forEach(k => {
+            const el = document.getElementById('p_' + k);
+            if (el && data[k]) el.dataset.pendingValue = data[k];
+        });
+        refreshBidsEntities();
+    }
+
+    function populateEntitySelect(id, values) {
+        const el = document.getElementById(id);
+        const desired = el.dataset.pendingValue || el.value || 'all';
+        delete el.dataset.pendingValue;
+        el.innerHTML = '';
+        const allOpt = document.createElement('option');
+        allOpt.value = 'all';
+        allOpt.textContent = 'All';
+        el.appendChild(allOpt);
+        values.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v;
+            el.appendChild(opt);
+        });
+        el.value = values.includes(desired) ? desired : 'all';
+    }
+
+    async function refreshBidsEntities() {
+        const qsiprepDir = value('p_qsiprep');
+        if (!qsiprepDir) return;
+        try {
+            const data = await window.dsiUi.fetchJson('/api/bids/entities', { qsiprep_dir: qsiprepDir });
+            populateEntitySelect('p_session', data.sessions || []);
+            populateEntitySelect('p_acq', data.acqs || []);
+            populateEntitySelect('p_space', data.spaces || []);
+        } catch (error) {
+            // qsiprep_dir may not exist yet (still being typed) - stay quiet.
+        }
     }
 
     async function runPipeline() {
         try {
             const payload = buildPayload();
             const res = await window.dsiUi.fetchJson('/api/run/pipeline', payload);
-            resultEl.textContent = JSON.stringify(res, null, 2);
+            resultEl.textContent = `Job started: ${res.job.job_id} - see "Backend Jobs" below for live output.`;
             const currentProject = {
                 ...window.dsiUi.getCurrentProject(),
                 qsiprep_dir: payload.qsiprep_dir,
@@ -279,6 +338,7 @@
     document.getElementById('runPipelineBtn').addEventListener('click', runPipeline);
     document.getElementById('savePipelinePresetBtn').addEventListener('click', savePreset);
     document.getElementById('loadPipelinePresetBtn').addEventListener('click', loadSelectedPreset);
+    document.getElementById('p_qsiprep').addEventListener('change', refreshBidsEntities);
 
     const p = window.dsiUi.getCurrentProject();
     if (p) {
@@ -289,6 +349,8 @@
             project_root: p.project_root,
             connectivity_config: p.connectivity_config,
         });
+    } else {
+        refreshBidsEntities();
     }
 
     loadPresetList();

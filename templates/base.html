@@ -79,6 +79,7 @@
         .job-running { background: #fff3cd; color: #664d03; }
         .job-completed { background: #d1e7dd; color: #0f5132; }
         .job-failed { background: #f8d7da; color: #842029; }
+        .job-stopped { background: #e2e3e5; color: #41464b; }
         .jobs-panel {
             border-top: 1px solid #dde3ea;
             background: #ffffff;
@@ -243,7 +244,10 @@
     <div class="container-xxl">
         <div class="d-flex justify-content-between align-items-center mb-2">
             <h6 class="mb-0"><i class="fas fa-terminal me-2 text-secondary"></i>Backend Jobs</h6>
-            <button class="btn btn-sm btn-outline-secondary" type="button" id="refreshJobsBtn">Refresh</button>
+            <div>
+                <button class="btn btn-sm btn-outline-danger d-none" type="button" id="stopJobBtn"><i class="fas fa-stop me-1"></i>Stop</button>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="refreshJobsBtn">Refresh</button>
+            </div>
         </div>
         <div id="jobsPanel" class="small text-muted">No jobs yet.</div>
         <pre id="jobLogOutput" class="terminal-output d-none"></pre>
@@ -394,6 +398,23 @@
     }
 
     let jobPollTimer = null;
+    const stopJobBtn = document.getElementById('stopJobBtn');
+    let activeJobId = null;
+
+    async function stopActiveJob() {
+        if (!activeJobId) return;
+        stopJobBtn.disabled = true;
+        try {
+            await fetchJson(`/api/jobs/${activeJobId}/stop`, undefined, 'POST');
+            notify('Stop requested.');
+        } catch (error) {
+            notify(error.message, true);
+        } finally {
+            stopJobBtn.disabled = false;
+            refreshJobs();
+        }
+    }
+    stopJobBtn.addEventListener('click', stopActiveJob);
 
     async function refreshJobLog(jobId) {
         try {
@@ -419,17 +440,22 @@
             if (!Array.isArray(jobs) || jobs.length === 0) {
                 jobsPanel.textContent = 'No jobs yet.';
                 jobLogOutput.classList.add('d-none');
+                stopJobBtn.classList.add('d-none');
+                activeJobId = null;
                 return;
             }
+            const statusPillClass = { completed: 'job-completed', failed: 'job-failed', stopped: 'job-stopped' };
             const sorted = jobs.slice().sort((a, b) => (a.started_at || '').localeCompare(b.started_at || ''));
             const latest = sorted.slice().reverse().slice(0, 10);
             jobsPanel.innerHTML = latest.map(j => {
-                const statusClass = j.status === 'completed' ? 'job-completed' : (j.status === 'failed' ? 'job-failed' : 'job-running');
+                const statusClass = statusPillClass[j.status] || 'job-running';
                 return `<div class="mb-1"><span class="job-pill ${statusClass}">${escapeHtml(j.status || '')}</span> <strong>${escapeHtml(j.type || '')}</strong> <span class="text-muted">${escapeHtml(j.log_file || '')}</span></div>`;
             }).join('');
 
             const mostRecent = sorted[sorted.length - 1];
+            activeJobId = mostRecent.job_id;
             const status = await refreshJobLog(mostRecent.job_id);
+            stopJobBtn.classList.toggle('d-none', status !== 'running');
             if (status === 'running') {
                 jobPollTimer = setTimeout(refreshJobs, 2000);
             }

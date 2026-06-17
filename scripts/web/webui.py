@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -53,6 +54,7 @@ logger = logging.getLogger("webui")
 
 jobs_lock = threading.Lock()
 jobs: Dict[str, Dict] = {}
+job_processes: Dict[str, subprocess.Popen] = {}
 
 
 def _is_process_running(pid: int) -> bool:
@@ -226,19 +228,31 @@ def find_free_port(start_port: int) -> int:
 def _run_job(job_id: str, cmd: List[str], cwd: Optional[Path]):
     start_ts = time.time()
     log_file = Path(jobs[job_id]["log_file"])
+    rc = -1
     try:
         with open(log_file, "w", encoding="utf-8") as fh:
             fh.write(f"Command: {' '.join(cmd)}\n")
             fh.flush()
-            result = subprocess.run(cmd, cwd=str(cwd) if cwd else None, stdout=fh, stderr=fh)
-            rc = result.returncode
+            # start_new_session puts the whole process tree (this wrapper,
+            # apptainer, dsi_studio inside it) in its own process group, so
+            # /api/jobs/<id>/stop can kill all of it together via killpg -
+            # killing just this top pid would leave the container running.
+            proc = subprocess.Popen(
+                cmd, cwd=str(cwd) if cwd else None, stdout=fh, stderr=fh, start_new_session=True
+            )
+            with jobs_lock:
+                job_processes[job_id] = proc
+            rc = proc.wait()
     except Exception as exc:  # noqa: BLE001
-        rc = -1
         with open(log_file, "a", encoding="utf-8") as fh:
             fh.write(f"Exception: {exc}\n")
+    finally:
+        with jobs_lock:
+            job_processes.pop(job_id, None)
     end_ts = time.time()
     with jobs_lock:
-        jobs[job_id]["status"] = "completed" if rc == 0 else "failed"
+        if jobs[job_id]["status"] != "stopped":
+            jobs[job_id]["status"] = "completed" if rc == 0 else "failed"
         jobs[job_id]["return_code"] = rc
         jobs[job_id]["ended_at"] = datetime.now(timezone.utc).isoformat()
         jobs[job_id]["duration_sec"] = round(end_ts - start_ts, 2)
@@ -295,6 +309,9 @@ def build_pipeline_command(payload: Dict) -> List[str]:
         "force": "--force",
         "apptainer_image": "--apptainer_image",
         "apptainer_bind": "--apptainer_bind",
+        "session": "--session",
+        "acq": "--acq",
+        "space": "--space",
     }
 
     for field, flag in optional_args.items():
@@ -505,6 +522,37 @@ def api_job_log(job_id):
     return jsonify({"content": _ANSI_RE.sub("", content), "status": job["status"]})
 
 
+@app.route("/api/jobs/<job_id>/stop", methods=["POST"])
+def api_job_stop(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        proc = job_processes.get(job_id)
+    if not job:
+        return _json_error("Unknown job_id", 404)
+    if job["status"] != "running" or proc is None:
+        return _json_error("Job is not running", 400)
+
+    with jobs_lock:
+        jobs[job_id]["status"] = "stopped"
+
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return jsonify({"ok": True})
+
+    def _force_kill():
+        time.sleep(5)
+        try:
+            if proc.poll() is None:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    threading.Thread(target=_force_kill, daemon=True).start()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/save_settings", methods=["POST"])
 def api_save_settings():
     try:
@@ -585,6 +633,48 @@ def api_fs_list():
         return jsonify({"ok": True, **result})
     except Exception as exc:  # noqa: BLE001
         return _json_error(str(exc), 400)
+
+
+@app.route("/api/bids/entities", methods=["POST"])
+def api_bids_entities():
+    """Scan a qsiprep dir's preprocessed DWI filenames for the BIDS entities
+    (session/acq/space) actually present, so the UI can offer real choices
+    instead of free text.
+    """
+    try:
+        payload = _get_json_payload()
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+
+    qsiprep_dir = str(payload.get("qsiprep_dir", "")).strip()
+    if not qsiprep_dir:
+        return _json_error("Missing qsiprep_dir", 400)
+    root = Path(qsiprep_dir).expanduser()
+    if not root.is_dir():
+        return _json_error(f"Not a directory: {qsiprep_dir}", 400)
+
+    dwi_files = list(root.glob("sub-*/dwi/*_desc-preproc_dwi.nii.gz"))
+    dwi_files += list(root.glob("sub-*/ses-*/dwi/*_desc-preproc_dwi.nii.gz"))
+    if not dwi_files:
+        dwi_files = list(root.glob("*_desc-preproc_dwi.nii.gz"))
+
+    sessions, acqs, spaces = set(), set(), set()
+    for f in dwi_files:
+        for part in f.name.split("_"):
+            if part.startswith("ses-"):
+                sessions.add(part[len("ses-"):])
+            elif part.startswith("acq-"):
+                acqs.add(part[len("acq-"):])
+            elif part.startswith("space-"):
+                spaces.add(part[len("space-"):])
+
+    return jsonify({
+        "ok": True,
+        "file_count": len(dwi_files),
+        "sessions": sorted(sessions),
+        "acqs": sorted(acqs),
+        "spaces": sorted(spaces),
+    })
 
 
 def main():

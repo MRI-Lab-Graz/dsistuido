@@ -126,6 +126,9 @@ class DSIStudioPipeline:
                 self.force_components = {'src', 'fib', 'diffs', 'database'}
             else:
                 self.force_components.add(self.force_arg)
+        self.session_filter = self._normalize_bids_filter(args.session, "ses")
+        self.acq_filter = self._normalize_bids_filter(args.acq, "acq")
+        self.space_filter = self._normalize_bids_filter(args.space, "space")
         self.min_file_age = args.min_file_age  # Minimum age in seconds
         self.dry_run = args.dry_run
         self.run_connectivity = args.run_connectivity
@@ -606,6 +609,49 @@ class DSIStudioPipeline:
             ses = ses.split(".")[0] # Clean 'ses-1.odf.qsdr.fz' to 'ses-1'
         return sub, ses
 
+    @staticmethod
+    def _normalize_bids_filter(value: Optional[str], prefix: str) -> Optional[str]:
+        """Turn a user-supplied filter value into a bare entity value to
+        compare against, or None for 'no filter'. Accepts 'all'/empty (no
+        filter) and either the bare value or the prefixed entity ('ses-1'
+        or '1') so the web UI and CLI can both pass through whatever the
+        dropdown/glob gave them.
+        """
+        if not value:
+            return None
+        v = value.strip()
+        if not v or v.lower() == "all":
+            return None
+        if v.lower().startswith(f"{prefix}-"):
+            v = v[len(prefix) + 1:]
+        return v
+
+    @staticmethod
+    def _parse_bids_entities(path: Path) -> Dict[str, str]:
+        """Parse 'key-value' BIDS entities out of a filename, e.g.
+        'sub-1_ses-1_acq-multi_space-ACPC_desc-preproc_dwi.nii.gz' ->
+        {'sub': '1', 'ses': '1', 'acq': 'multi', 'space': 'ACPC', 'desc': 'preproc'}.
+        Non-entity parts (no '-', e.g. the trailing 'dwi.nii.gz') are skipped.
+        """
+        entities = {}
+        for part in path.name.split("_"):
+            if "-" in part:
+                key, _, value = part.partition("-")
+                entities[key] = value
+        return entities
+
+    def _matches_bids_filters(self, path: Path) -> bool:
+        if not (self.session_filter or self.acq_filter or self.space_filter):
+            return True
+        entities = self._parse_bids_entities(path)
+        if self.session_filter and entities.get("ses", "").lower() != self.session_filter.lower():
+            return False
+        if self.acq_filter and entities.get("acq", "").lower() != self.acq_filter.lower():
+            return False
+        if self.space_filter and entities.get("space", "").lower() != self.space_filter.lower():
+            return False
+        return True
+
     def verify_raw_vs_qsiprep(self):
         """Cross-check rawdata subjects/sessions against qsiprep outputs."""
         if not self.rawdata_dir.exists():
@@ -642,7 +688,16 @@ class DSIStudioPipeline:
         all_dwi += list(self.qsiprep_dir.glob("sub-*/ses-*/dwi/*_desc-preproc_dwi.nii.gz"))
         if not all_dwi:
             all_dwi = list(self.qsiprep_dir.glob("*_desc-preproc_dwi.nii.gz"))
-            
+
+        if self.session_filter or self.acq_filter or self.space_filter:
+            before = len(all_dwi)
+            all_dwi = [f for f in all_dwi if self._matches_bids_filters(f)]
+            self.logger.info(
+                f"BIDS filter (session={self.session_filter or 'all'}, "
+                f"acq={self.acq_filter or 'all'}, space={self.space_filter or 'all'}): "
+                f"{len(all_dwi)}/{before} files matched"
+            )
+
         valid_dwi = []
         current_time = datetime.now().timestamp()
         
@@ -728,15 +783,36 @@ class DSIStudioPipeline:
             f"--output={output_src}"
         ]
 
-        # Try to find T1w image in anat directory
-        anat_dir = dwi_file.parents[1] / "anat"
-        t1w_files = list(anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz"))
+        # Try to find T1w image in anat directory. For session-layout qsiprep
+        # output (sub-X/ses-Y/dwi/...), the per-session anat dir often holds
+        # only transforms - qsiprep shares one T1w across sessions in the
+        # subject-level anat dir (sub-X/anat/) when run with a shared
+        # anatomical workflow. Check session-level first, fall back to
+        # subject-level.
+        # .exists() (not just glob matching the filename) matters here: a
+        # DataLad/git-annex file whose content hasn't been fetched yet is a
+        # broken symlink - it matches the glob pattern but isn't readable.
+        # Passing that path to dsi_studio would fail silently/confusingly
+        # inside the container instead of a clear "missing" message.
+        anat_dirs = [dwi_file.parents[1] / "anat"]
+        if session_id and len(dwi_file.parents) > 2:
+            anat_dirs.append(dwi_file.parents[2] / "anat")
+        t1w_files = []
+        for anat_dir in anat_dirs:
+            t1w_files = [f for f in anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz") if f.exists()]
+            if t1w_files:
+                break
         if t1w_files:
             dsi_args.append(f"--t1w={t1w_files[0]}")
             self.logger.info(f"Found T1w for {base_id}: {t1w_files[0].name}")
+        elif any(anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz") for anat_dir in anat_dirs):
+            self.logger.warning(
+                f"T1w for {base_id} matched but content isn't fetched (broken DataLad/git-annex "
+                f"symlink) - run 'datalad get' on it first. Treating as missing."
+            )
 
         # Try to find mask
-        mask_files = list(dwi_file.parent.glob(f"{base_id}*_desc-brain_mask.nii.gz"))
+        mask_files = [f for f in dwi_file.parent.glob(f"{base_id}*_desc-brain_mask.nii.gz") if f.exists()]
         if mask_files:
             dsi_args.append(f"--mask={mask_files[0]}")
             self.logger.info(f"Found mask for {base_id}: {mask_files[0].name}")
@@ -1413,6 +1489,9 @@ if __name__ == "__main__":
     parser.add_argument("--skip_existing", action="store_true", help="Skip subjects if SRC/FIB already exist")
     parser.add_argument("--force", nargs='?', const='all', help="Force overwrite: 'database' (only db), 'diffs', 'src', 'fib', 'all' (default: all)")
     parser.add_argument("--min_file_age", type=int, default=300, help="Minimum file age in seconds (default: 300s/5min) to avoid processing files still being written")
+    parser.add_argument("--session", default="all", help="BIDS session to process, e.g. 'ses-1' or '1' (default: all sessions)")
+    parser.add_argument("--acq", default="all", help="BIDS acq tag to filter by, e.g. 'multi' (default: all)")
+    parser.add_argument("--space", default="all", help="BIDS space tag to filter by, e.g. 'ACPC' (default: all)")
     parser.add_argument("--pilot", action="store_true", help="Process only one randomly chosen subject")
     parser.add_argument("--dry_run", action="store_true", help="Show commands without running them")
     parser.add_argument("--run_connectivity", action="store_true", help="Run connectivity extraction after FIB generation")
