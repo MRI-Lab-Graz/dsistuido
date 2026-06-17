@@ -286,6 +286,17 @@ class DSIStudioPipeline:
         convert it - that's a deliberate, separate decision, not a side
         effect of turning this flag on.
         """
+        if self.project_root not in (self.output_dir, *self.output_dir.parents):
+            self.logger.error(
+                f"--project_root ({self.project_root}) is not an ancestor of --output_dir "
+                f"({self.output_dir}); DataLad needs the subject dataset nested inside the "
+                f"superdataset. Refusing to run 'datalad create' here - pass a --project_root "
+                f"that actually contains output_dir, or drop it and let it auto-infer. "
+                f"Continuing without DataLad for this run."
+            )
+            self.use_datalad = False
+            return
+
         datalad_dir = self.project_root / ".datalad"
         if pin_file_preexisted and not datalad_dir.exists():
             self.logger.warning(
@@ -347,8 +358,13 @@ class DSIStudioPipeline:
                 needs_save = True
 
         if needs_save:
+            # Scoped to the registration path only - dataset_dir may be a large,
+            # pre-existing study root with unrelated content; an unscoped
+            # 'datalad save' walks and saves everything in the tree, not just
+            # what this method touched.
             subprocess.run(
-                ["datalad", "save", "-d", str(dataset_dir), "-m", f"Register {self.container_name} container"],
+                ["datalad", "save", "-d", str(dataset_dir), "-m", f"Register {self.container_name} container",
+                 str(env_dir.relative_to(dataset_dir))],
                 capture_output=True, text=True
             )
 
@@ -1324,8 +1340,13 @@ class DSIStudioPipeline:
         # Build summary with error checking
         if self.use_datalad and not self.dry_run:
             self.logger.info("Rolling up subject dataset updates into the project superdataset...")
+            # Scoped to output_dir, not the whole project_root - project_root
+            # may be a large, pre-existing study root with unrelated content
+            # (other pipelines' rawdata/derivatives); an unscoped recursive
+            # save would sweep all of that into the dataset too.
             subprocess.run(
-                ["datalad", "save", "-d", str(self.project_root), "-r", "-m", "Update subject datasets for this pipeline run"],
+                ["datalad", "save", "-d", str(self.project_root), "-r", "-m", "Update subject datasets for this pipeline run",
+                 str(self.output_dir.relative_to(self.project_root))],
                 capture_output=True, text=True
             )
 

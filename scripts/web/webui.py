@@ -16,6 +16,7 @@ Features
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -479,6 +480,29 @@ def api_run_viewer():
 def api_jobs():
     with jobs_lock:
         return jsonify(list(jobs.values()))
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+@app.route("/api/jobs/<job_id>/log", methods=["GET"])
+def api_job_log(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job:
+        return _json_error("Unknown job_id", 404)
+    log_file = Path(job["log_file"])
+    if not log_file.exists():
+        return jsonify({"content": "", "status": job["status"]})
+    max_bytes = 20_000
+    size = log_file.stat().st_size
+    with open(log_file, "r", encoding="utf-8", errors="replace") as fh:
+        if size > max_bytes:
+            fh.seek(size - max_bytes)
+            content = "... (truncated)\n" + fh.read()
+        else:
+            content = fh.read()
+    return jsonify({"content": _ANSI_RE.sub("", content), "status": job["status"]})
 
 
 @app.route("/api/save_settings", methods=["POST"])

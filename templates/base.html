@@ -83,6 +83,19 @@
             border-top: 1px solid #dde3ea;
             background: #ffffff;
         }
+        .terminal-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+            font-size: 0.8rem;
+            padding: 0.75rem;
+            border-radius: 8px;
+            max-height: 320px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-top: 0.5rem;
+        }
         .picker-entry {
             cursor: pointer;
         }
@@ -233,6 +246,7 @@
             <button class="btn btn-sm btn-outline-secondary" type="button" id="refreshJobsBtn">Refresh</button>
         </div>
         <div id="jobsPanel" class="small text-muted">No jobs yet.</div>
+        <pre id="jobLogOutput" class="terminal-output d-none"></pre>
     </div>
 </div>
 
@@ -272,6 +286,7 @@
 <script>
 (function() {
     const jobsPanel = document.getElementById('jobsPanel');
+    const jobLogOutput = document.getElementById('jobLogOutput');
     const refreshJobsBtn = document.getElementById('refreshJobsBtn');
     const PROJECT_KEY = 'dsi_web_current_project';
 
@@ -378,19 +393,46 @@
         }
     }
 
+    let jobPollTimer = null;
+
+    async function refreshJobLog(jobId) {
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/log`);
+            const data = await res.json();
+            jobLogOutput.classList.remove('d-none');
+            jobLogOutput.textContent = data.content || '(no output yet)';
+            jobLogOutput.scrollTop = jobLogOutput.scrollHeight;
+            return data.status;
+        } catch (error) {
+            return null;
+        }
+    }
+
     async function refreshJobs() {
         try {
             const data = await fetch('/api/jobs');
             const jobs = await data.json();
+            if (jobPollTimer) {
+                clearTimeout(jobPollTimer);
+                jobPollTimer = null;
+            }
             if (!Array.isArray(jobs) || jobs.length === 0) {
                 jobsPanel.textContent = 'No jobs yet.';
+                jobLogOutput.classList.add('d-none');
                 return;
             }
-            const latest = jobs.slice().reverse().slice(0, 10);
+            const sorted = jobs.slice().sort((a, b) => (a.started_at || '').localeCompare(b.started_at || ''));
+            const latest = sorted.slice().reverse().slice(0, 10);
             jobsPanel.innerHTML = latest.map(j => {
                 const statusClass = j.status === 'completed' ? 'job-completed' : (j.status === 'failed' ? 'job-failed' : 'job-running');
                 return `<div class="mb-1"><span class="job-pill ${statusClass}">${escapeHtml(j.status || '')}</span> <strong>${escapeHtml(j.type || '')}</strong> <span class="text-muted">${escapeHtml(j.log_file || '')}</span></div>`;
             }).join('');
+
+            const mostRecent = sorted[sorted.length - 1];
+            const status = await refreshJobLog(mostRecent.job_id);
+            if (status === 'running') {
+                jobPollTimer = setTimeout(refreshJobs, 2000);
+            }
         } catch (error) {
             jobsPanel.innerHTML = '';
             const span = document.createElement('span');
@@ -465,18 +507,23 @@
                 pickerEntriesBody.innerHTML = data.entries.map(entry => {
                     const icon = entry.is_dir ? 'fa-folder text-warning' : 'fa-file text-secondary';
                     const typeLabel = entry.is_dir ? 'Folder' : 'File';
-                    const openBtn = entry.is_dir ? `<button type="button" class="btn btn-sm btn-outline-primary picker-open-btn" data-path="${escapeHtml(entry.path)}">Open</button>` : '';
+                    const name = entry.is_dir
+                        ? `<a href="#" class="picker-open-link" data-path="${escapeHtml(entry.path)}"><i class="fas ${icon} me-2"></i>${escapeHtml(entry.name)}</a>`
+                        : `<i class="fas ${icon} me-2"></i>${escapeHtml(entry.name)}`;
                     const canChoose = (pickerMode === 'any') || (pickerMode === 'file' && !entry.is_dir) || (pickerMode === 'dir' && entry.is_dir);
-                    const chooseBtn = canChoose ? `<button type="button" class="btn btn-sm btn-success picker-choose-btn" data-path="${escapeHtml(entry.path)}">Choose</button>` : '<span class="text-muted">-</span>';
-                    return `<tr class="picker-entry"><td><i class="fas ${icon} me-2"></i>${escapeHtml(entry.name)}</td><td>${escapeHtml(typeLabel)}</td><td>${openBtn} ${chooseBtn}</td></tr>`;
+                    const selectBtn = canChoose ? `<button type="button" class="btn btn-sm btn-outline-success picker-choose-btn" data-path="${escapeHtml(entry.path)}">Select</button>` : '<span class="text-muted">-</span>';
+                    return `<tr class="picker-entry"><td>${name}</td><td>${escapeHtml(typeLabel)}</td><td>${selectBtn}</td></tr>`;
                 }).join('');
             }
 
             document.querySelectorAll('.picker-root-btn').forEach(btn => {
                 btn.addEventListener('click', () => loadPickerEntries(btn.dataset.path));
             });
-            document.querySelectorAll('.picker-open-btn').forEach(btn => {
-                btn.addEventListener('click', () => loadPickerEntries(btn.dataset.path));
+            document.querySelectorAll('.picker-open-link').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    loadPickerEntries(link.dataset.path);
+                });
             });
             document.querySelectorAll('.picker-choose-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
