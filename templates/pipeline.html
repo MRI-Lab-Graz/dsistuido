@@ -338,6 +338,11 @@
     document.getElementById('runPipelineBtn').addEventListener('click', runPipeline);
     document.getElementById('savePipelinePresetBtn').addEventListener('click', savePreset);
     document.getElementById('loadPipelinePresetBtn').addEventListener('click', loadSelectedPreset);
+    // Picking a preset from the dropdown alone used to do nothing until the
+    // separate "Load Preset" button was also clicked - easy to miss, and
+    // looks like the saved values were lost. Auto-load on selection too;
+    // the button stays as an explicit re-load/refresh action.
+    document.getElementById('pipelinePresetSelect').addEventListener('change', loadSelectedPreset);
     document.getElementById('p_qsiprep').addEventListener('change', refreshBidsEntities);
 
     const p = window.dsiUi.getCurrentProject();
