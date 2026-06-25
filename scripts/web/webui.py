@@ -155,6 +155,28 @@ def _resolve_input_path(path_value: Optional[str]) -> Path:
     return candidate
 
 
+def _resolve_project_settings_dir(project_root_value: Optional[str]) -> Optional[Path]:
+    """Project-scoped presets dir (<project_root>/code/dsistudio/presets) if
+    project_root points at a real, existing directory; None otherwise so
+    callers can fall back to the shared SETTINGS_DIR.
+    """
+    if not project_root_value:
+        return None
+    candidate = _resolve_input_path(str(project_root_value))
+    if not candidate.exists() or not candidate.is_dir():
+        return None
+    return candidate / "code" / "dsistudio" / "presets"
+
+
+def _settings_search_dirs(project_root_value: Optional[str]) -> List[Path]:
+    """Directories to look for presets in, project-scoped dir first (when
+    valid) so newer per-project saves take precedence over the legacy shared
+    location, but old presets saved before project-scoping remain visible.
+    """
+    project_dir = _resolve_project_settings_dir(project_root_value)
+    return [project_dir, SETTINGS_DIR] if project_dir else [SETTINGS_DIR]
+
+
 def _list_directory_entries(path: Path, mode: str) -> Dict:
     """Return sorted directory entries for file/folder picker."""
     target = path
@@ -258,11 +280,24 @@ def _run_job(job_id: str, cmd: List[str], cwd: Optional[Path]):
         jobs[job_id]["duration_sec"] = round(end_ts - start_ts, 2)
 
 
-def launch_job(cmd: List[str], job_type: str, cwd: Optional[Path] = None) -> Dict[str, str]:
+def _resolve_log_dir(project_root_value: Optional[str]) -> Path:
+    """<project_root>/code/dsistudio/logs/ when a valid project root is given,
+    else the shared scripts/web_logs/ dir (same fallback rule as presets).
+    """
+    if project_root_value:
+        candidate = _resolve_input_path(str(project_root_value))
+        if candidate.exists() and candidate.is_dir():
+            return candidate / "code" / "dsistudio" / "logs"
+    return LOG_DIR
+
+
+def launch_job(cmd: List[str], job_type: str, cwd: Optional[Path] = None, project_root: Optional[str] = None) -> Dict[str, str]:
     """Launch a subprocess in a background thread and track it."""
     # Use UUID-based job IDs to avoid collisions for rapid consecutive runs.
     job_id = uuid.uuid4().hex
-    log_file = LOG_DIR / f"{job_type}_{job_id}.log"
+    log_dir = _resolve_log_dir(project_root)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{job_type}_{job_id}.log"
     with jobs_lock:
         jobs[job_id] = {
             "job_id": job_id,
@@ -327,6 +362,7 @@ def build_pipeline_command(payload: Dict) -> List[str]:
         "pilot",
         "dry_run",
         "run_connectivity",
+        "connectivity_only",
         "apptainer",
         "datalad",
     ]
@@ -450,7 +486,7 @@ def api_run_pipeline():
     try:
         payload = _get_json_payload()
         cmd = build_pipeline_command(payload)
-        job = launch_job(cmd, job_type="pipeline", cwd=REPO_DIR)
+        job = launch_job(cmd, job_type="pipeline", cwd=REPO_DIR, project_root=payload.get("project_root"))
         return jsonify({"ok": True, "job": job, "cmd": cmd})
     except ValueError as exc:
         return _json_error(str(exc), 400)
@@ -472,7 +508,7 @@ def api_run_connectometry():
     try:
         payload = _get_json_payload()
         cmd = build_connectometry_command(payload)
-        job = launch_job(cmd, job_type="connectometry", cwd=REPO_DIR)
+        job = launch_job(cmd, job_type="connectometry", cwd=REPO_DIR, project_root=payload.get("project_root"))
         return jsonify({"ok": True, "job": job, "cmd": cmd})
     except ValueError as exc:
         return _json_error(str(exc), 400)
@@ -485,7 +521,7 @@ def api_run_viewer():
     try:
         payload = _get_json_payload()
         cmd = build_viewer_command(payload)
-        job = launch_job(cmd, job_type="viewer", cwd=REPO_DIR)
+        job = launch_job(cmd, job_type="viewer", cwd=REPO_DIR, project_root=payload.get("project_root"))
         return jsonify({"ok": True, "job": job, "cmd": cmd})
     except ValueError as exc:
         return _json_error(str(exc), 400)
@@ -563,13 +599,15 @@ def api_save_settings():
             return _json_error("Missing filename", 400)
         if "/" in filename or "\\" in filename:
             return _json_error("Invalid filename", 400)
-
-        target = (SETTINGS_DIR / filename).resolve()
-        settings_root = SETTINGS_DIR.resolve()
-        if target.parent != settings_root:
-            return _json_error("Invalid filename", 400)
-        if target.suffix.lower() != ".json":
+        if not filename.lower().endswith(".json"):
             return _json_error("Filename must end with .json", 400)
+
+        # Prefer the current project's own code/dsistudio/presets/ folder so
+        # presets live alongside the project they belong to; fall back to the
+        # shared scripts/web_settings/ dir when no (valid) project is set.
+        target_dir = _resolve_project_settings_dir(payload.get("project_root")) or SETTINGS_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / filename
 
         with open(target, "w", encoding="utf-8") as fh:
             json.dump(payload.get("settings", {}), fh, indent=2)
@@ -582,13 +620,21 @@ def api_save_settings():
 
 @app.route("/api/list_settings", methods=["GET"])
 def api_list_settings():
+    project_root = request.args.get("project_root", "")
+    seen = set()
     files = []
-    for path in sorted(SETTINGS_DIR.glob("*.json")):
-        files.append({
-            "name": path.name,
-            "path": str(path),
-            "modified": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
-        })
+    for dir_path in _settings_search_dirs(project_root):
+        if not dir_path.exists():
+            continue
+        for path in sorted(dir_path.glob("*.json")):
+            if path.name in seen:
+                continue
+            seen.add(path.name)
+            files.append({
+                "name": path.name,
+                "path": str(path),
+                "modified": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
+            })
     return jsonify(files)
 
 
@@ -602,9 +648,16 @@ def api_read_settings():
     filename = str(payload.get("filename", "")).strip()
     if not filename:
         return _json_error("Missing filename", 400)
+    if "/" in filename or "\\" in filename:
+        return _json_error("Invalid filename", 400)
 
-    target = (SETTINGS_DIR / filename).resolve()
-    if target.parent != SETTINGS_DIR.resolve() or not target.exists():
+    target = None
+    for dir_path in _settings_search_dirs(payload.get("project_root")):
+        candidate = dir_path / filename
+        if candidate.exists():
+            target = candidate
+            break
+    if target is None:
         return _json_error("Preset not found", 404)
 
     try:
@@ -633,6 +686,31 @@ def api_fs_list():
         return jsonify({"ok": True, **result})
     except Exception as exc:  # noqa: BLE001
         return _json_error(str(exc), 400)
+
+
+@app.route("/api/fs/read_json", methods=["POST"])
+def api_fs_read_json():
+    try:
+        payload = _get_json_payload()
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+
+    requested_path = str(payload.get("path", "")).strip()
+    if not requested_path:
+        return _json_error("Missing path", 400)
+
+    target = _resolve_input_path(requested_path)
+    if not target.exists() or not target.is_file():
+        return _json_error(f"File not found: {target}", 404)
+
+    try:
+        with open(target, "r", encoding="utf-8") as fh:
+            content = json.load(fh)
+        return jsonify({"ok": True, "content": content})
+    except json.JSONDecodeError as exc:
+        return _json_error(f"Invalid JSON in {target}: {exc}", 400)
+    except Exception as exc:  # noqa: BLE001
+        return _json_error(str(exc), 500)
 
 
 @app.route("/api/bids/entities", methods=["POST"])

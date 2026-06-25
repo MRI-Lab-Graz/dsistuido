@@ -468,11 +468,17 @@
         }
     }
 
+    function currentProjectRoot() {
+        return (getCurrentProject() || {}).project_root || '';
+    }
+
     async function savePreset(kind, settings) {
         const ts = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
         const filename = `${kind}_${ts}.json`;
+        const projectRoot = settings.project_root || currentProjectRoot();
         return fetchJson('/api/save_settings', {
             filename,
+            project_root: projectRoot,
             settings: {
                 kind,
                 ...settings,
@@ -481,12 +487,18 @@
     }
 
     async function listPresets(kind) {
-        const files = await (await fetch('/api/list_settings')).json();
+        const projectRoot = currentProjectRoot();
+        const qs = projectRoot ? `?project_root=${encodeURIComponent(projectRoot)}` : '';
+        const files = await (await fetch('/api/list_settings' + qs)).json();
         return (files || []).filter(x => x.name && x.name.startsWith(kind + '_'));
     }
 
     async function readPreset(filename) {
-        return fetchJson('/api/settings/read', { filename });
+        return fetchJson('/api/settings/read', { filename, project_root: currentProjectRoot() });
+    }
+
+    async function readJsonFile(path) {
+        return fetchJson('/api/fs/read_json', { path });
     }
 
     let pickerTargetInput = null;
@@ -603,6 +615,7 @@
         savePreset,
         listPresets,
         readPreset,
+        readJsonFile,
         attachPathPickers,
         getCurrentProject,
         setCurrentProject,

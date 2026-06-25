@@ -131,7 +131,9 @@ class DSIStudioPipeline:
         self.space_filter = self._normalize_bids_filter(args.space, "space")
         self.min_file_age = args.min_file_age  # Minimum age in seconds
         self.dry_run = args.dry_run
-        self.run_connectivity = args.run_connectivity
+        self.connectivity_only = args.connectivity_only
+        # connectivity-only mode has nothing to do without the extraction step
+        self.run_connectivity = args.run_connectivity or self.connectivity_only
         self.connectivity_config = Path(args.connectivity_config).resolve() if args.connectivity_config else None
         self.connectivity_output_dir = Path(args.connectivity_output_dir).resolve() if args.connectivity_output_dir else self.output_dir / "connectivity"
         self.connectivity_threads = args.connectivity_threads
@@ -749,6 +751,56 @@ class DSIStudioPipeline:
         self.logger.info(f"Found {len(valid_dwi)} valid DWI files")
         return valid_dwi
 
+    def find_existing_fib_files(self) -> List[Path]:
+        """Find already-generated FIB files for connectivity-only mode.
+
+        Mirrors the search logic in reconstruct_fib() (same per-method
+        filename suffix, same datalad-vs-flat directory layout) but reads
+        instead of generates. FIB filenames only carry sub-/ses- entities
+        (acq/space are dropped in generate_src's base_id), so only the
+        session filter can be applied here.
+        """
+        method_suffixes = {
+            '4': ['.odf.gqi.fz'],  # GQI
+            '7': ['.odf.qsdr.fz'],  # QSDR
+        }
+        method_key = str(self.method) if self.method else '4'
+        expected_suffixes = method_suffixes.get(method_key, ['*'])
+
+        if self.acq_filter or self.space_filter:
+            self.logger.warning(
+                "connectivity_only: acq/space filters are ignored - FIB filenames don't retain those BIDS entities."
+            )
+
+        all_fibs: List[Path] = []
+        for suffix in expected_suffixes:
+            if self.use_datalad:
+                all_fibs.extend(self.output_dir.glob(f"sub-*/fib/*{suffix}"))
+            else:
+                all_fibs.extend(self.fib_dir.glob(f"*{suffix}"))
+
+        if self.session_filter:
+            before = len(all_fibs)
+            all_fibs = [f for f in all_fibs if self._parse_sub_ses(f)[1].lower() == f"ses-{self.session_filter}".lower()]
+            self.logger.info(f"Session filter (ses-{self.session_filter}): {len(all_fibs)}/{before} FIB files matched")
+
+        if not all_fibs:
+            self.logger.error(f"No existing FIB files found (method {self.method}) for connectivity-only mode!")
+            return []
+
+        all_fibs.sort()
+        if self.pilot:
+            subjects = {self._parse_sub_ses(f)[0] for f in all_fibs}
+            subjects.discard("")
+            if subjects:
+                selected_sub = random.choice(list(subjects))
+                selected = [f for f in all_fibs if f.name.startswith(selected_sub + "_")]
+                self.logger.info(f"PILOT MODE: Randomly selected subject {selected_sub} ({len(selected)} FIB files)")
+                return selected
+
+        self.logger.info(f"Found {len(all_fibs)} existing FIB files for connectivity-only mode")
+        return all_fibs
+
     def generate_src(self, dwi_file: Path):
         """Generate SRC file from DWI, bval, and bvec, including T1w if available"""
         subject_id = dwi_file.name.split('_')[0]
@@ -1248,87 +1300,100 @@ class DSIStudioPipeline:
         if self.verify_rawdata:
             self.verify_raw_vs_qsiprep()
 
-        dwi_files = self.find_qsiprep_files()
-        fib_files = []
-        
-        for idx, dwi in enumerate(dwi_files, 1):
-            # Show progress
-            self.print_progress_summary(idx - 1, len(dwi_files))
-            self.logger.info(f"Processing {dwi.name} [{idx}/{len(dwi_files)}]")
-            
-            # Extract subject and session IDs
-            sub_id = dwi.name.split('_')[0]
-            ses_id = dwi.name.split('_')[1] if '_ses-' in dwi.name else 'ses-1'
-            
-            session_info = {
-                'session_id': ses_id,
-                'dwi_file': dwi.name,
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'param0': self.param0,
-                'status': 'failed'
-            }
-            
-            src = self.generate_src(dwi)
-            if src:
-                session_info['src_file'] = src.name
-                # Validate SRC
-                if src.exists() and src.stat().st_size > 0:
-                    self.logger.info(f"✓ SRC validated: {src.name} ({src.stat().st_size / (1024*1024):.1f} MB)")
-                
-                fib = self.reconstruct_fib(src)
-                self.logger.debug(f"reconstruct_fib returned: {fib}")
-                if fib:
-                    fib_files.append(fib)
-                    self.logger.debug(f"Added FIB to list: {fib.name}, total now: {len(fib_files)}")
-                    session_info['fib_file'] = fib.name
-                    session_info['status'] = 'success'
-                    self.stats["processed"] += 1
-                else:
-                    self.logger.debug(f"reconstruct_fib returned None/False")
-            else:
-                # If SRC generation was skipped, check if FIB already exists
-                if self.skip_existing:
-                    # Use the same base_id logic as generate_src
-                    dwi_subject_id = dwi.name.split('_')[0]
-                    dwi_session_id = ""
-                    if "_ses-" in dwi.name:
-                        dwi_session_id = "_" + dwi.name.split('_')[1]
-                    subject_prefix = f"{dwi_subject_id}{dwi_session_id}"
-                    
-                    method_suffixes = {
-                        '4': ['.odf.gqi.fz'],  # GQI
-                        '7': ['.odf.qsdr.fz'],  # QSDR
-                    }
-                    method_key = str(self.method) if self.method else '4'
-                    expected_suffixes = method_suffixes.get(method_key, ['*'])
-                    search_dir = (self.output_dir / dwi_subject_id / "fib") if self.use_datalad else self.fib_dir
+        if self.connectivity_only:
+            self.logger.info(
+                "connectivity_only: skipping SRC/FIB generation and the longitudinal diff step; "
+                "using FIB files that already exist."
+            )
+            dwi_files = []
+            fib_files = self.find_existing_fib_files()
+            self.stats["found"] = len(fib_files)
+        else:
+            dwi_files = self.find_qsiprep_files()
+            fib_files = []
 
-                    for suffix in expected_suffixes:
-                        pattern = f"{subject_prefix}{suffix}"
-                        matches = list(search_dir.glob(pattern))
-                        self.logger.debug(f"Looking for FIB: {pattern} in {search_dir} -> {len(matches)} matches")
-                        if matches:
-                            fib = matches[0]
-                            fib_files.append(fib)
-                            self.logger.debug(f"Added FIB file: {fib.name}")
-                            session_info['fib_file'] = fib.name
-                            session_info['status'] = 'success'
-                            self.stats["skipped_existing"] += 1
-                            break
+            for idx, dwi in enumerate(dwi_files, 1):
+                # Show progress
+                self.print_progress_summary(idx - 1, len(dwi_files))
+                self.logger.info(f"Processing {dwi.name} [{idx}/{len(dwi_files)}]")
+
+                # Extract subject and session IDs
+                sub_id = dwi.name.split('_')[0]
+                ses_id = dwi.name.split('_')[1] if '_ses-' in dwi.name else 'ses-1'
+
+                session_info = {
+                    'session_id': ses_id,
+                    'dwi_file': dwi.name,
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'param0': self.param0,
+                    'status': 'failed'
+                }
+
+                src = self.generate_src(dwi)
+                if src:
+                    session_info['src_file'] = src.name
+                    # Validate SRC
+                    if src.exists() and src.stat().st_size > 0:
+                        self.logger.info(f"✓ SRC validated: {src.name} ({src.stat().st_size / (1024*1024):.1f} MB)")
+
+                    fib = self.reconstruct_fib(src)
+                    self.logger.debug(f"reconstruct_fib returned: {fib}")
+                    if fib:
+                        fib_files.append(fib)
+                        self.logger.debug(f"Added FIB to list: {fib.name}, total now: {len(fib_files)}")
+                        session_info['fib_file'] = fib.name
+                        session_info['status'] = 'success'
+                        self.stats["processed"] += 1
+                    else:
+                        self.logger.debug(f"reconstruct_fib returned None/False")
                 else:
-                    self.stats["skipped_missing"] += 1
-            
-            # Track for HTML report
-            if sub_id not in self.subject_details:
-                self.subject_details[sub_id] = []
-            self.subject_details[sub_id].append(session_info)
+                    # If SRC generation was skipped, check if FIB already exists
+                    if self.skip_existing:
+                        # Use the same base_id logic as generate_src
+                        dwi_subject_id = dwi.name.split('_')[0]
+                        dwi_session_id = ""
+                        if "_ses-" in dwi.name:
+                            dwi_session_id = "_" + dwi.name.split('_')[1]
+                        subject_prefix = f"{dwi_subject_id}{dwi_session_id}"
+
+                        method_suffixes = {
+                            '4': ['.odf.gqi.fz'],  # GQI
+                            '7': ['.odf.qsdr.fz'],  # QSDR
+                        }
+                        method_key = str(self.method) if self.method else '4'
+                        expected_suffixes = method_suffixes.get(method_key, ['*'])
+                        search_dir = (self.output_dir / dwi_subject_id / "fib") if self.use_datalad else self.fib_dir
+
+                        for suffix in expected_suffixes:
+                            pattern = f"{subject_prefix}{suffix}"
+                            matches = list(search_dir.glob(pattern))
+                            self.logger.debug(f"Looking for FIB: {pattern} in {search_dir} -> {len(matches)} matches")
+                            if matches:
+                                fib = matches[0]
+                                fib_files.append(fib)
+                                self.logger.debug(f"Added FIB file: {fib.name}")
+                                session_info['fib_file'] = fib.name
+                                session_info['status'] = 'success'
+                                self.stats["skipped_existing"] += 1
+                                break
+                    else:
+                        self.stats["skipped_missing"] += 1
+
+                # Track for HTML report
+                if sub_id not in self.subject_details:
+                    self.subject_details[sub_id] = []
+                self.subject_details[sub_id].append(session_info)
 
         if self.run_connectivity:
             self.logger.info(f"Starting connectivity extraction step (found {len(fib_files)} FIB files)")
             if not fib_files:
                 self.logger.warning("No FIB files found for connectivity extraction!")
             self.run_connectivity_extraction(fib_files)
-        
+
+        if self.connectivity_only:
+            self._finalize_run(dwi_files, fib_files)
+            return
+
         # --- Longitudinal Processing ---
         # Group FIBs by subject
         subject_fibs = {}
@@ -1401,6 +1466,10 @@ class DSIStudioPipeline:
                 # No participants.tsv, create database anyway
                 self.create_database(fib_files)
         
+        self._finalize_run(dwi_files, fib_files)
+
+    def _finalize_run(self, dwi_files: List[Path], fib_files: List[Path]):
+        """Cleanup phase + final summary, shared by the full pipeline and connectivity-only mode."""
         # --- Cleanup Phase ---
         # Delete intermediate .tar.gz and other temporary files to free space
         self.logger.info("🧹 Starting cleanup of intermediate files...")
@@ -1409,10 +1478,10 @@ class DSIStudioPipeline:
         self._cleanup_intermediate_files(self.diff_dir)
         self._cleanup_intermediate_files(self.connectivity_output_dir)
         self.logger.info("✓ Cleanup complete")
-        
+
         # --- Final Summary ---
         self.print_progress_summary(len(dwi_files), len(dwi_files))
-        
+
         # Build summary with error checking
         if self.use_datalad and not self.dry_run:
             self.logger.info("Rolling up subject dataset updates into the project superdataset...")
@@ -1429,23 +1498,31 @@ class DSIStudioPipeline:
         summary_lines = [
             "╔══════════════════════════════════════════════════════════════╗",
         ]
-        
-        # Check if there were any errors
-        if self.stats['diff_failed'] > 0 or self.stats['processed'] == 0:
+
+        # Check if there were any errors. In connectivity_only mode, "processed"
+        # never increments (no SRC/FIB generation happens), so that check would
+        # always misreport issues - judge success by FIB availability instead.
+        has_issues = (
+            self.stats['diff_failed'] > 0
+            or (self.connectivity_only and not fib_files)
+            or (not self.connectivity_only and self.stats['processed'] == 0)
+        )
+        if has_issues:
             summary_lines.append("║ ⚠️  PIPELINE COMPLETE WITH ISSUES                              ║")
         else:
             summary_lines.append("║ ✓ PIPELINE COMPLETE                                          ║")
-            
+
+        found_label = "Existing FIB files used" if self.connectivity_only else "Total DWI files found"
         summary_lines.extend([
             "╠══════════════════════════════════════════════════════════════╣",
-            f"║ Total DWI files found:    {self.stats.get('found', len(dwi_files)):>6}",
+            f"║ {found_label}:{' ' * (27 - len(found_label))}{self.stats.get('found', len(dwi_files)):>6}",
             f"║ Successfully processed:   {self.stats['processed']:>6}",
             f"║ SRC files validated:      {self.stats['src_ok']:>6}",
             f"║ FIB files validated:      {self.stats['fib_ok']:>6}",
             f"║ Skipped (existing):       {self.stats['skipped_existing']:>6}",
             f"║ Skipped (other reasons):  {self.stats['skipped_missing']:>6}",
         ])
-        
+
         # Add differential FIB stats if longitudinal processing was done
         if self.stats['diff_ok'] > 0 or self.stats['diff_failed'] > 0:
             summary_lines.extend([
@@ -1453,12 +1530,12 @@ class DSIStudioPipeline:
                 f"║ Differential FIB OK:      {self.stats['diff_ok']:>6}",
                 f"║ Differential FIB failed:  {self.stats['diff_failed']:>6}",
             ])
-        
+
         summary_lines.append("╚══════════════════════════════════════════════════════════════╝")
-        
+
         summary = "\n".join(summary_lines)
         self.logger.info(summary)
-        
+
         # Log errors if any occurred
         if self.stats['errors']:
             self.logger.warning(f"\n⚠️  {len(self.stats['errors'])} ERROR(S) ENCOUNTERED:")
@@ -1495,6 +1572,7 @@ if __name__ == "__main__":
     parser.add_argument("--pilot", action="store_true", help="Process only one randomly chosen subject")
     parser.add_argument("--dry_run", action="store_true", help="Show commands without running them")
     parser.add_argument("--run_connectivity", action="store_true", help="Run connectivity extraction after FIB generation")
+    parser.add_argument("--connectivity_only", action="store_true", help="Skip SRC/FIB (re)generation and the longitudinal diff step; run connectivity extraction directly on FIB files that already exist (implies --run_connectivity)")
     parser.add_argument("--connectivity_config", help="Path to connectivity extractor JSON config (e.g., graph_analysis_config.json)")
     parser.add_argument("--connectivity_output_dir", help="Directory for connectivity outputs (default: output_dir/connectivity)")
     parser.add_argument("--connectivity_threads", type=int, help="Thread override for connectivity extraction")

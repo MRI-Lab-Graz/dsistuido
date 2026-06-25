@@ -150,6 +150,11 @@
             <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_pilot"><label class="form-check-label" for="p_pilot">pilot</label></div>
             <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_dry_run"><label class="form-check-label" for="p_dry_run">dry_run</label></div>
             <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_run_connectivity"><label class="form-check-label" for="p_run_connectivity">run_connectivity</label></div>
+            <div class="col-md-3 form-check">
+                <input class="form-check-input" type="checkbox" id="p_connectivity_only">
+                <label class="form-check-label" for="p_connectivity_only">connectivity_only</label>
+                <div class="form-text">Skip SRC/FIB generation and the longitudinal diff step; run connectivity extraction directly on FIB files that already exist.</div>
+            </div>
         </div>
 
         <div class="d-flex gap-2 flex-wrap mt-3">
@@ -201,6 +206,7 @@
             pilot: checked('p_pilot'),
             dry_run: checked('p_dry_run'),
             run_connectivity: checked('p_run_connectivity'),
+            connectivity_only: checked('p_connectivity_only'),
         };
     }
 
@@ -228,10 +234,11 @@
             if (data[key] !== undefined && data[key] !== null) document.getElementById(id).value = data[key];
         });
 
-        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity','apptainer','datalad'].forEach(k => {
+        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity','connectivity_only','apptainer','datalad'].forEach(k => {
             const el = document.getElementById('p_' + k);
             if (el && data[k] !== undefined) el.checked = Boolean(data[k]);
         });
+        document.getElementById('p_connectivity_only').dispatchEvent(new Event('change'));
 
         // session/acq/space are <select> elements whose options are filled in
         // later by refreshBidsEntities() (scanned from the actual qsiprep
@@ -344,6 +351,18 @@
     // the button stays as an explicit re-load/refresh action.
     document.getElementById('pipelinePresetSelect').addEventListener('change', loadSelectedPreset);
     document.getElementById('p_qsiprep').addEventListener('change', refreshBidsEntities);
+
+    // connectivity_only implies run_connectivity server-side; reflect that in
+    // the UI so it's not confusing to see run_connectivity unchecked while
+    // connectivity extraction still runs.
+    const connectivityOnlyEl = document.getElementById('p_connectivity_only');
+    const runConnectivityEl = document.getElementById('p_run_connectivity');
+    connectivityOnlyEl.addEventListener('change', () => {
+        if (connectivityOnlyEl.checked) {
+            runConnectivityEl.checked = true;
+        }
+        runConnectivityEl.disabled = connectivityOnlyEl.checked;
+    });
 
     const p = window.dsiUi.getCurrentProject();
     if (p) {

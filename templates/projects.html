@@ -73,6 +73,16 @@
                     </div>
                 </div>
 
+                <div class="mb-3">
+                    <label class="form-label">Load profile from file</label>
+                    <div class="input-group path-picker-group" data-picker-mode="file">
+                        <input class="form-control" id="proj_load_file_path" placeholder="/path/to/project_profile.json" />
+                        <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                        <button class="btn btn-outline-primary" type="button" id="loadFromFileBtn"><i class="fas fa-file-import me-1"></i>Load</button>
+                    </div>
+                    <p class="path-help mt-1 mb-0">Pick a JSON file saved previously (e.g. via "Save Server Preset", which writes to &lt;project root&gt;/code/dsistudio/presets/).</p>
+                </div>
+
                 <div class="d-flex gap-2 flex-wrap">
                     <button class="btn btn-success" type="button" id="saveLocalProjectBtn"><i class="fas fa-floppy-disk me-1"></i>Save Local Profile</button>
                     <button class="btn btn-outline-primary" type="button" id="savePresetProjectBtn"><i class="fas fa-cloud-arrow-up me-1"></i>Save Server Preset</button>
@@ -95,7 +105,7 @@
                     <button class="btn btn-outline-secondary" type="button" id="refreshProjectPresetsBtn"><i class="fas fa-arrows-rotate"></i></button>
                 </div>
                 <button class="btn btn-outline-primary w-100" type="button" id="loadProjectPresetBtn">Load selected preset</button>
-                <p class="path-help mt-2 mb-0">Presets are stored in scripts/web_settings and can be reused across pages.</p>
+                <p class="path-help mt-2 mb-0">Presets save into &lt;project root&gt;/code/dsistudio/presets/ (falls back to scripts/web_settings if no project root is set) and can be reused across pages.</p>
             </div>
         </div>
     </div>
@@ -144,6 +154,23 @@
         window.dsiUi.notify('Local project profile loaded.');
     }
 
+    async function loadFromFile() {
+        const path = document.getElementById('proj_load_file_path').value.trim();
+        if (!path) {
+            window.dsiUi.notify('Pick a JSON file to load first.', true);
+            return;
+        }
+        try {
+            const data = await window.dsiUi.readJsonFile(path);
+            const settings = data.content && data.content.settings ? data.content.settings : data.content;
+            apply(settings || {});
+            window.dsiUi.setCurrentProject(settings || {});
+            window.dsiUi.notify(`Loaded profile from ${path}`);
+        } catch (error) {
+            window.dsiUi.notify(error.message, true);
+        }
+    }
+
     async function savePreset() {
         try {
             await window.dsiUi.savePreset('project', collect());
@@ -186,6 +213,7 @@
 
     document.getElementById('saveLocalProjectBtn').addEventListener('click', saveLocal);
     document.getElementById('loadLocalProjectBtn').addEventListener('click', loadLocal);
+    document.getElementById('loadFromFileBtn').addEventListener('click', loadFromFile);
     document.getElementById('savePresetProjectBtn').addEventListener('click', savePreset);
     document.getElementById('refreshProjectPresetsBtn').addEventListener('click', loadPresetList);
     document.getElementById('loadProjectPresetBtn').addEventListener('click', loadSelectedPreset);
