@@ -1,28 +1,27 @@
 {
-  "comment": "DSI Studio Connectivity Matrix Extraction Configuration - Processing settings only",
-  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio",
   "atlases": [
     "Brainnectome",
-    "HCP-MMP",
     "FreeSurferDKT_Cortical",
-    "FreeSurferDKT_Subcortical"
+    "FreeSurferDKT_Subcortical",
+    "HCP-MMP"
   ],
   "connectivity_values": [
     "count",
-    "qa"
+    "qa",
+    "dti_fa"
   ],
   "track_count": 100000,
   "thread_count": 8,
   "tracking_parameters": {
     "method": 0,
     "otsu_threshold": 0.6,
-    "fa_threshold": 0.0,
-    "turning_angle": 0.0,
-    "step_size": 0.0,
-    "smoothing": 0.0,
+    "fa_threshold": 0,
+    "turning_angle": 0,
+    "step_size": 0,
+    "smoothing": 0,
     "min_length": 0,
     "max_length": 0,
-    "track_voxel_ratio": 2.0,
+    "track_voxel_ratio": 2,
     "check_ending": 0,
     "random_seed": 0,
     "dt_threshold": 0.2
@@ -31,21 +30,5 @@
     "connectivity_type": "pass",
     "connectivity_output": "matrix,connectogram,measure"
   },
-  "comments": {
-    "file_formats": "Script supports both .fib.gz and .fz fiber files automatically",
-    "dsi_studio_cmd": "Full path to DSI Studio executable (use 'dsi_studio' if in PATH)",
-    "usage_note": "Input/output paths, pilot mode, batch mode are specified via command line arguments",
-    "method": "Tracking algorithm: 0=Streamline(Euler), 1=RK4, 2=Voxel tracking",
-    "otsu_threshold": "Default Otsu threshold (0.1-1.0)",
-    "fa_threshold": "FA threshold for termination (0=automatic)",
-    "turning_angle": "Maximum turning angle in degrees (0=random 15-90\u00b0)",
-    "step_size": "Step size in mm (0=random 1-3 voxels)",
-    "smoothing": "Fraction of previous direction to mix in (0-1)",
-    "min_length": "Minimum fiber length in mm (0=dataset specific)",
-    "max_length": "Maximum fiber length in mm (0=dataset specific)",
-    "track_voxel_ratio": "Seeds-per-voxel ratio",
-    "check_ending": "Drop tracks not terminating in ROI (0=off, 1=on)",
-    "connectivity_type": "pass=whole tract, end=tract endpoints only",
-    "connectivity_values_note": "Available metrics depend on reconstruction method used"
-  }
+  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio"
 }

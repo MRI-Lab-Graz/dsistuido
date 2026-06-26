@@ -125,7 +125,9 @@
                 <div class="input-group path-picker-group" data-picker-mode="file">
                     <input class="form-control" id="p_connectivity_config" />
                     <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                    <button class="btn btn-outline-primary" type="button" id="editConnectivitySettingsBtn"><i class="fas fa-sliders me-1"></i>Edit Settings</button>
                 </div>
+                <div class="form-text">Build the config visually instead of hand-editing JSON - opens a dedicated settings page and saves into the project folder.</div>
             </div>
 
             <div class="col-md-6">
@@ -351,6 +353,12 @@
     // the button stays as an explicit re-load/refresh action.
     document.getElementById('pipelinePresetSelect').addEventListener('change', loadSelectedPreset);
     document.getElementById('p_qsiprep').addEventListener('change', refreshBidsEntities);
+    document.getElementById('editConnectivitySettingsBtn').addEventListener('click', () => {
+        const path = value('p_connectivity_config');
+        const params = new URLSearchParams();
+        if (path) params.set('path', path);
+        window.location.href = '/connectivity-settings' + (params.toString() ? ('?' + params.toString()) : '');
+    });
 
     // connectivity_only implies run_connectivity server-side; reflect that in
     // the UI so it's not confusing to see run_connectivity unchecked while
@@ -363,6 +371,16 @@
         }
         runConnectivityEl.disabled = connectivityOnlyEl.checked;
     });
+
+    // The connectivity settings editor returns here with the saved file's
+    // path so the field reflects what was just saved, without requiring the
+    // user to re-browse for it.
+    const urlParams = new URLSearchParams(window.location.search);
+    const returnedConnConfig = urlParams.get('connectivity_config');
+    if (returnedConnConfig) {
+        window.dsiUi.setCurrentProject({ ...window.dsiUi.getCurrentProject(), connectivity_config: returnedConnConfig });
+        window.history.replaceState({}, '', window.location.pathname);
+    }
 
     const p = window.dsiUi.getCurrentProject();
     if (p) {

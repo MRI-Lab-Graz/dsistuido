@@ -10,7 +10,7 @@ This file gives a short purpose for each root/script entrypoint and proposes wha
 | `scripts/connectivity/extract_connectivity_matrices.py` | Connectivity extraction with config parsing, batch mode, logging, and validation helpers. | Keep. |
 | `scripts/connectivity/run_connectometry_batch.py` | Batch connectometry runner with parameter sweeps, retries, and headless JPG recovery logic. | Keep. |
 | `scripts/connectivity/validate_setup.py` | Pre-flight validation of DSI Studio/config/input availability. | Keep. |
-| `scripts/web/webui.py` | Flask/Waitress UI wrapper to launch pipeline/connectometry/viewer jobs. | Keep. |
+| `gui.py` | Flask/Waitress UI wrapper to launch pipeline/connectometry/viewer jobs. | Keep. |
 | `scripts/visualization/generate_interactive_viewer.py` | Builds a single HTML viewer from connectometry JPG outputs. | Keep. |
 | `scripts/connectivity/generate_jpgs_from_tt.py` | Fallback renderer from `.tt.gz` to JPG in headless/server workflows. | Keep. |
 

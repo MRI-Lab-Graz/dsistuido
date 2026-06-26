@@ -1,0 +1,420 @@
+{% extends "base.html" %}
+
+{% block title %}DSI Studio Console - Connectivity Settings{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('pipeline_page') }}"><i class="fas fa-arrow-left me-1"></i>Back to Pipeline</a>
+</div>
+
+<div class="card feature-card border-info mb-3">
+    <div class="card-body py-3">
+        <div class="d-flex align-items-start">
+            <i class="fas fa-circle-info text-info me-2 mt-1"></i>
+            <div>
+                <strong>Quick Guide</strong>
+                <div class="text-muted small mt-1">
+                    Pick atlases, metrics, and tracking parameters below, then save. The result is a connectivity config JSON written into the project folder - no manual JSON editing required. Use "Save &amp; Use in Pipeline" to also fill the Pipeline page's config field.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card feature-card mb-3">
+    <div class="card-header"><i class="fas fa-file-export me-2 text-primary"></i>Settings File</div>
+    <div class="card-body">
+        <label class="form-label">Save to (JSON path)</label>
+        <div class="input-group path-picker-group" data-picker-mode="file">
+            <input class="form-control" id="cs_path" placeholder="/path/to/project/code/dsistudio/connectivity_config.json" />
+            <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+            <button class="btn btn-outline-secondary" type="button" id="csLoadBtn"><i class="fas fa-download me-1"></i>Load</button>
+        </div>
+        <div class="form-text">Defaults to <code>&lt;project root&gt;/code/dsistudio/connectivity_config.json</code> when a project is active.</div>
+    </div>
+</div>
+
+<div class="card feature-card mb-3" id="csForm">
+    <div class="card-header"><i class="fas fa-sliders me-2 text-warning"></i>Connectivity Settings</div>
+    <div class="card-body">
+        <h6 class="text-uppercase text-muted small">Atlases</h6>
+        <div class="small mb-2" id="atlasesStatus">Checking which atlases are installed...</div>
+        <div class="row g-2" id="atlasesGrid"></div>
+        <div class="input-group mt-2" style="max-width: 360px;">
+            <input class="form-control" id="atlasesCustomInput" placeholder="Add custom atlas name" />
+            <button class="btn btn-outline-secondary" type="button" id="atlasesCustomAddBtn">Add</button>
+        </div>
+        <div class="form-text">Custom/checked names not found locally are flagged in red - they will fail at run time unless added to the DSI Studio install.</div>
+
+        <hr>
+        <h6 class="text-uppercase text-muted small">Connectivity Values (metrics)</h6>
+        <div class="form-text mb-1">Available metrics depend on the reconstruction method used for the FIB file.</div>
+        <div class="row g-2" id="valuesGrid"></div>
+        <div class="input-group mt-2" style="max-width: 360px;">
+            <input class="form-control" id="valuesCustomInput" placeholder="Add custom metric name" />
+            <button class="btn btn-outline-secondary" type="button" id="valuesCustomAddBtn">Add</button>
+        </div>
+
+        <hr>
+        <div class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label">Track count</label>
+                <input class="form-control" id="track_count" type="number" min="1" value="100000" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Thread count</label>
+                <input class="form-control" id="thread_count" type="number" min="1" value="8" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">DSI Studio executable (optional)</label>
+                <div class="input-group path-picker-group" data-picker-mode="file">
+                    <input class="form-control" id="dsi_studio_cmd" placeholder="dsi_studio" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+                <div class="form-text">Only used for standalone runs; the Pipeline page always passes its own path.</div>
+            </div>
+        </div>
+
+        <hr>
+        <h6 class="text-uppercase text-muted small">Tracking Parameters</h6>
+        <div class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label">Method</label>
+                <select class="form-select" id="tp_method">
+                    <option value="0">0 - Streamline (Euler)</option>
+                    <option value="1">1 - RK4</option>
+                    <option value="2">2 - Voxel tracking</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Otsu threshold</label>
+                <input class="form-control" id="tp_otsu_threshold" type="number" step="0.01" min="0.1" max="1" value="0.6" />
+                <div class="form-text">Range 0.1-1.0</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">FA threshold</label>
+                <input class="form-control" id="tp_fa_threshold" type="number" step="0.01" value="0.0" />
+                <div class="form-text">0 = automatic</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Turning angle (deg)</label>
+                <input class="form-control" id="tp_turning_angle" type="number" step="1" value="0" />
+                <div class="form-text">0 = random 15-90deg</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Step size (mm)</label>
+                <input class="form-control" id="tp_step_size" type="number" step="0.1" value="0" />
+                <div class="form-text">0 = random 1-3 voxels</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Smoothing</label>
+                <input class="form-control" id="tp_smoothing" type="number" step="0.05" min="0" max="1" value="0" />
+                <div class="form-text">Fraction of previous direction (0-1)</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Min length (mm)</label>
+                <input class="form-control" id="tp_min_length" type="number" step="1" value="0" />
+                <div class="form-text">0 = dataset specific</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Max length (mm)</label>
+                <input class="form-control" id="tp_max_length" type="number" step="1" value="0" />
+                <div class="form-text">0 = dataset specific</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Track/voxel ratio</label>
+                <input class="form-control" id="tp_track_voxel_ratio" type="number" step="0.1" value="2.0" />
+                <div class="form-text">Seeds per voxel</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Check ending</label>
+                <select class="form-select" id="tp_check_ending">
+                    <option value="0">Off - keep all tracks</option>
+                    <option value="1">On - drop tracks not terminating in ROI</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Random seed</label>
+                <input class="form-control" id="tp_random_seed" type="number" step="1" value="0" />
+                <div class="form-text">0 = random</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Differential tracking threshold</label>
+                <input class="form-control" id="tp_dt_threshold" type="number" step="0.05" value="0.2" />
+            </div>
+        </div>
+
+        <hr>
+        <h6 class="text-uppercase text-muted small">Connectivity Options</h6>
+        <div class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label">Connectivity type</label>
+                <select class="form-select" id="co_connectivity_type">
+                    <option value="pass">pass - whole tract</option>
+                    <option value="end">end - tract endpoints only</option>
+                </select>
+            </div>
+            <div class="col-md-8">
+                <label class="form-label">Output types</label>
+                <div class="row g-2" id="outputsGrid"></div>
+            </div>
+        </div>
+
+        <hr>
+        <div class="d-flex gap-2 flex-wrap">
+            <button class="btn btn-success" type="button" id="csSaveBtn"><i class="fas fa-floppy-disk me-1"></i>Save Settings</button>
+            <button class="btn btn-primary" type="button" id="csSaveUseBtn"><i class="fas fa-check me-1"></i>Save &amp; Use in Pipeline</button>
+            <button class="btn btn-outline-secondary" type="button" id="csResetBtn"><i class="fas fa-rotate-left me-1"></i>Reset to Defaults</button>
+        </div>
+
+        <pre class="mt-3 p-3 bg-dark text-light rounded" id="csResult">Ready.</pre>
+        <details class="mt-2">
+            <summary class="text-muted small">Preview JSON</summary>
+            <pre class="mt-2 p-3 bg-light border rounded small" id="csPreview"></pre>
+        </details>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    // Atlas options are not hardcoded - they're discovered from the DSI
+    // Studio install via /api/atlases/list, so the UI never offers an atlas
+    // (e.g. AAL3) that isn't actually bundled and would fail at run time.
+    const DEFAULT_ATLASES = ['Brainnectome', 'HCP-MMP', 'FreeSurferDKT_Cortical', 'FreeSurferDKT_Subcortical'];
+    let availableAtlasSet = null;
+
+    const KNOWN_VALUES = [
+        'count', 'ncount', 'ncount2', 'mean_length', 'qa', 'fa', 'dti_fa',
+        'md', 'ad', 'rd', 'iso', 'rdi', 'ndi', 'dti_ad', 'dti_rd', 'dti_md', 'trk',
+    ];
+    const DEFAULT_VALUES = ['count', 'qa'];
+
+    const KNOWN_OUTPUTS = ['matrix', 'connectogram', 'measure'];
+    const DEFAULT_OUTPUTS = ['matrix', 'connectogram', 'measure'];
+
+    const resultEl = document.getElementById('csResult');
+    const previewEl = document.getElementById('csPreview');
+
+    function value(id) { return (document.getElementById(id).value || '').trim(); }
+    function numberValue(id, fallback) {
+        const raw = value(id);
+        if (raw === '') return fallback;
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : fallback;
+    }
+    function setNumber(id, val, fallback) {
+        document.getElementById(id).value = (val === undefined || val === null) ? fallback : val;
+    }
+
+    function buildChecklist(containerId, knownValues, selectedValues, availableSet) {
+        const container = document.getElementById(containerId);
+        container.innerHTML = '';
+        const selected = selectedValues || [];
+        const allValues = Array.from(new Set([...(knownValues || []), ...selected]));
+        allValues.forEach((v) => {
+            const col = document.createElement('div');
+            col.className = 'col-md-3 form-check';
+            const checkbox = document.createElement('input');
+            checkbox.className = 'form-check-input';
+            checkbox.type = 'checkbox';
+            checkbox.value = v;
+            checkbox.id = containerId + '_' + v.replace(/[^a-zA-Z0-9_-]/g, '_');
+            checkbox.checked = selected.includes(v);
+            const label = document.createElement('label');
+            label.className = 'form-check-label';
+            const unavailable = availableSet && !availableSet.has(v);
+            label.htmlFor = checkbox.id;
+            label.textContent = unavailable ? `${v} (not found locally)` : v;
+            if (unavailable) label.classList.add('text-danger', 'fw-semibold');
+            col.appendChild(checkbox);
+            col.appendChild(label);
+            container.appendChild(col);
+        });
+    }
+
+    async function refreshAvailableAtlases() {
+        const statusEl = document.getElementById('atlasesStatus');
+        const dsiCmd = value('dsi_studio_cmd');
+        const qs = dsiCmd ? ('?dsi_studio_cmd=' + encodeURIComponent(dsiCmd)) : '';
+        try {
+            const res = await fetch('/api/atlases/list' + qs);
+            const data = await res.json();
+            availableAtlasSet = new Set(data.atlases || []);
+            if (data.found) {
+                statusEl.className = 'small mb-2 text-success';
+                statusEl.textContent = `${data.atlases.length} atlas(es) found in ${data.atlas_dir}`;
+            } else {
+                statusEl.className = 'small mb-2 text-danger';
+                statusEl.textContent = `DSI Studio atlas folder not found at ${data.atlas_dir} - cannot verify availability.`;
+            }
+        } catch (error) {
+            availableAtlasSet = null;
+            statusEl.className = 'small mb-2 text-danger';
+            statusEl.textContent = `Could not check installed atlases: ${error.message}`;
+            return;
+        }
+        const known = availableAtlasSet ? Array.from(availableAtlasSet) : [];
+        buildChecklist('atlasesGrid', known, getChecked('atlasesGrid'), availableAtlasSet);
+        updatePreview();
+    }
+
+    function getChecked(containerId) {
+        return Array.from(document.querySelectorAll(`#${containerId} input[type=checkbox]:checked`)).map((cb) => cb.value);
+    }
+
+    function addCustomValue(containerId, knownValues, inputId, availableSet) {
+        const input = document.getElementById(inputId);
+        const v = input.value.trim();
+        if (!v) return;
+        input.value = '';
+        const current = getChecked(containerId);
+        if (current.includes(v)) return;
+        buildChecklist(containerId, knownValues, [...current, v], availableSet);
+        updatePreview();
+    }
+
+    function buildConfig() {
+        const cfg = {
+            atlases: getChecked('atlasesGrid'),
+            connectivity_values: getChecked('valuesGrid'),
+            track_count: numberValue('track_count', 100000),
+            thread_count: numberValue('thread_count', 8),
+            tracking_parameters: {
+                method: numberValue('tp_method', 0),
+                otsu_threshold: numberValue('tp_otsu_threshold', 0.6),
+                fa_threshold: numberValue('tp_fa_threshold', 0.0),
+                turning_angle: numberValue('tp_turning_angle', 0.0),
+                step_size: numberValue('tp_step_size', 0.0),
+                smoothing: numberValue('tp_smoothing', 0.0),
+                min_length: numberValue('tp_min_length', 0),
+                max_length: numberValue('tp_max_length', 0),
+                track_voxel_ratio: numberValue('tp_track_voxel_ratio', 2.0),
+                check_ending: numberValue('tp_check_ending', 0),
+                random_seed: numberValue('tp_random_seed', 0),
+                dt_threshold: numberValue('tp_dt_threshold', 0.2),
+            },
+            connectivity_options: {
+                connectivity_type: value('co_connectivity_type') || 'pass',
+                connectivity_output: getChecked('outputsGrid').join(','),
+            },
+        };
+        const dsiCmd = value('dsi_studio_cmd');
+        if (dsiCmd) cfg.dsi_studio_cmd = dsiCmd;
+        return cfg;
+    }
+
+    function applyConfig(data) {
+        data = data || {};
+        const known = availableAtlasSet ? Array.from(availableAtlasSet) : [];
+        buildChecklist('atlasesGrid', known, data.atlases || DEFAULT_ATLASES, availableAtlasSet);
+        buildChecklist('valuesGrid', KNOWN_VALUES, data.connectivity_values || DEFAULT_VALUES);
+        setNumber('track_count', data.track_count, 100000);
+        setNumber('thread_count', data.thread_count, 8);
+        document.getElementById('dsi_studio_cmd').value = data.dsi_studio_cmd || '';
+
+        const tp = data.tracking_parameters || {};
+        setNumber('tp_method', tp.method, 0);
+        setNumber('tp_otsu_threshold', tp.otsu_threshold, 0.6);
+        setNumber('tp_fa_threshold', tp.fa_threshold, 0.0);
+        setNumber('tp_turning_angle', tp.turning_angle, 0.0);
+        setNumber('tp_step_size', tp.step_size, 0.0);
+        setNumber('tp_smoothing', tp.smoothing, 0.0);
+        setNumber('tp_min_length', tp.min_length, 0);
+        setNumber('tp_max_length', tp.max_length, 0);
+        setNumber('tp_track_voxel_ratio', tp.track_voxel_ratio, 2.0);
+        setNumber('tp_check_ending', tp.check_ending, 0);
+        setNumber('tp_random_seed', tp.random_seed, 0);
+        setNumber('tp_dt_threshold', tp.dt_threshold, 0.2);
+
+        const co = data.connectivity_options || {};
+        document.getElementById('co_connectivity_type').value = co.connectivity_type || 'pass';
+        const outs = String(co.connectivity_output || DEFAULT_OUTPUTS.join(','))
+            .split(',').map((s) => s.trim()).filter(Boolean);
+        buildChecklist('outputsGrid', KNOWN_OUTPUTS, outs);
+
+        refreshAvailableAtlases();
+        updatePreview();
+    }
+
+    function updatePreview() {
+        previewEl.textContent = JSON.stringify(buildConfig(), null, 2);
+    }
+
+    function defaultConfigPath() {
+        const p = window.dsiUi.getCurrentProject();
+        const root = (p && p.project_root) || '';
+        if (!root) return '';
+        return root.replace(/[\\/]+$/, '') + '/code/dsistudio/connectivity_config.json';
+    }
+
+    async function loadFromPath(silentIfMissing) {
+        const path = value('cs_path');
+        if (!path) return;
+        try {
+            const res = await window.dsiUi.readJsonFile(path);
+            applyConfig(res.content || {});
+            resultEl.textContent = `Loaded ${path}`;
+        } catch (error) {
+            if (!silentIfMissing) {
+                resultEl.textContent = error.message;
+                window.dsiUi.notify(error.message, true);
+            }
+        }
+    }
+
+    async function saveSettings() {
+        const path = value('cs_path');
+        if (!path) {
+            window.dsiUi.notify('Set a JSON path to save to first.', true);
+            return null;
+        }
+        const content = buildConfig();
+        const res = await window.dsiUi.fetchJson('/api/fs/write_json', { path, content });
+        resultEl.textContent = `Saved to ${res.saved_to}`;
+        window.dsiUi.notify('Connectivity settings saved.');
+        return res.saved_to;
+    }
+
+    document.getElementById('atlasesCustomAddBtn').addEventListener('click', () => {
+        const known = availableAtlasSet ? Array.from(availableAtlasSet) : [];
+        addCustomValue('atlasesGrid', known, 'atlasesCustomInput', availableAtlasSet);
+    });
+    document.getElementById('valuesCustomAddBtn').addEventListener('click', () => addCustomValue('valuesGrid', KNOWN_VALUES, 'valuesCustomInput'));
+    document.getElementById('csLoadBtn').addEventListener('click', () => loadFromPath(false));
+    document.getElementById('csResetBtn').addEventListener('click', () => applyConfig({}));
+    document.getElementById('dsi_studio_cmd').addEventListener('change', refreshAvailableAtlases);
+
+    document.getElementById('csSaveBtn').addEventListener('click', async () => {
+        try {
+            await saveSettings();
+        } catch (error) {
+            resultEl.textContent = error.message;
+            window.dsiUi.notify(error.message, true);
+        }
+    });
+
+    document.getElementById('csSaveUseBtn').addEventListener('click', async () => {
+        try {
+            const savedTo = await saveSettings();
+            if (savedTo) {
+                window.location.href = '/pipeline?connectivity_config=' + encodeURIComponent(savedTo);
+            }
+        } catch (error) {
+            resultEl.textContent = error.message;
+            window.dsiUi.notify(error.message, true);
+        }
+    });
+
+    document.getElementById('csForm').addEventListener('change', updatePreview);
+    document.getElementById('csForm').addEventListener('input', updatePreview);
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialPath = urlParams.get('path') || defaultConfigPath();
+    document.getElementById('cs_path').value = initialPath;
+    applyConfig({});
+    if (initialPath) loadFromPath(true);
+})();
+</script>
+{% endblock %}

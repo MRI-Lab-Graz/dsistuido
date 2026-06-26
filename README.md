@@ -49,6 +49,7 @@ python scripts/pipeline/dsi_studio_pipeline.py \
 ```
 dsistudio/
 ├── README.md                          # This file
+├── gui.py                             # Web UI launcher (Flask/Waitress)
 ├── requirements.txt                   # Canonical Python dependencies
 ├── installation/                      # Setup & installation files
 │   ├── setup_env.sh                   # Environment setup script
@@ -70,8 +71,6 @@ dsistudio/
 │   │   └── create_thumbnail_pdfs.py
 │   ├── qa/
 │   │   └── check_fib_metrics.py
-│   ├── web/
-│   │   └── webui.py
 │   ├── common/
 │   │   └── utils.py
 │   ├── web_logs/
@@ -346,11 +345,11 @@ python scripts/connectivity/validate_setup.py --config configs/your_config.json
 
 | Script | Purpose |
 |--------|---------|
+| `gui.py` | Web UI for visualization |
 | `pipeline/dsi_studio_pipeline.py` | Main processing pipeline |
 | `connectivity/extract_connectivity_matrices.py` | Connectivity matrix extraction |
 | `connectivity/run_connectometry_batch.py` | Batch connectometry analysis |
 | `connectivity/validate_setup.py` | Setup validation tool |
-| `web/webui.py` | Web UI for visualization |
 | `qa/check_fib_metrics.py` | FIB metrics and `--inspect` single-file mode |
 | `pipeline/monitor_pipeline.sh` | Pipeline log monitor |
 

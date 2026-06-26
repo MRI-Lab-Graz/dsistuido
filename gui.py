@@ -35,14 +35,16 @@ from urllib.request import urlopen
 from flask import Flask, jsonify, render_template, request, redirect, url_for
 from waitress import serve
 
-WEB_DIR = Path(__file__).resolve().parent
-SCRIPTS_DIR = WEB_DIR.parent
-REPO_DIR = SCRIPTS_DIR.parent
+REPO_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = REPO_DIR / "scripts"
 TEMPLATES_DIR = REPO_DIR / "templates"
 LOG_DIR = SCRIPTS_DIR / "web_logs"
 SETTINGS_DIR = SCRIPTS_DIR / "web_settings"
 SERVER_STATE_FILE = SETTINGS_DIR / "webui_server_state.json"
 APP_SIGNATURE = "dsi-studio-webui"
+# Matches the default in scripts/pipeline/dsi_studio_pipeline.py's --dsi_studio_cmd
+# argument, so atlas discovery looks in the same place the pipeline actually runs.
+DEFAULT_DSI_STUDIO_CMD = "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio"
 
 LOG_DIR.mkdir(exist_ok=True)
 SETTINGS_DIR.mkdir(exist_ok=True)
@@ -153,6 +155,15 @@ def _resolve_input_path(path_value: Optional[str]) -> Path:
     else:
         candidate = candidate.resolve()
     return candidate
+
+
+def _atlas_human_dir(dsi_studio_cmd: Optional[str]) -> Path:
+    """DSI Studio ships its bundled atlases at <install_dir>/atlas/human -
+    same lookup dsi_studio_pipeline.py uses to validate a connectivity
+    config's atlas list before a run.
+    """
+    cmd = (dsi_studio_cmd or "").strip() or DEFAULT_DSI_STUDIO_CMD
+    return _resolve_input_path(cmd).parent / "atlas" / "human"
 
 
 def _resolve_project_settings_dir(project_root_value: Optional[str]) -> Optional[Path]:
@@ -476,6 +487,11 @@ def connectometry_page():
     return render_template("connectometry.html", active_page="connectometry")
 
 
+@app.route("/connectivity-settings")
+def connectivity_settings_page():
+    return render_template("connectivity_settings.html", active_page="pipeline")
+
+
 @app.route("/viewer")
 def viewer_page():
     return render_template("viewer.html", active_page="viewer")
@@ -711,6 +727,49 @@ def api_fs_read_json():
         return _json_error(f"Invalid JSON in {target}: {exc}", 400)
     except Exception as exc:  # noqa: BLE001
         return _json_error(str(exc), 500)
+
+
+@app.route("/api/fs/write_json", methods=["POST"])
+def api_fs_write_json():
+    try:
+        payload = _get_json_payload()
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+
+    requested_path = str(payload.get("path", "")).strip()
+    if not requested_path:
+        return _json_error("Missing path", 400)
+    if not requested_path.lower().endswith(".json"):
+        return _json_error("Path must end with .json", 400)
+
+    target = _resolve_input_path(requested_path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as fh:
+            json.dump(payload.get("content", {}), fh, indent=2)
+        return jsonify({"ok": True, "saved_to": str(target)})
+    except Exception as exc:  # noqa: BLE001
+        return _json_error(str(exc), 500)
+
+
+@app.route("/api/atlases/list", methods=["GET"])
+def api_atlases_list():
+    """List atlases actually installed on this machine (matching .nii.gz +
+    .txt label file pairs under DSI Studio's atlas/human dir), so the
+    connectivity settings UI only offers atlases that will actually be found
+    at run time instead of a hardcoded, possibly stale, name list.
+    """
+    dsi_studio_cmd = request.args.get("dsi_studio_cmd", "")
+    atlas_dir = _atlas_human_dir(dsi_studio_cmd)
+    if not atlas_dir.is_dir():
+        return jsonify({"ok": True, "atlas_dir": str(atlas_dir), "found": False, "atlases": []})
+
+    atlases = sorted(
+        p.name[: -len(".nii.gz")]
+        for p in atlas_dir.glob("*.nii.gz")
+        if (atlas_dir / f"{p.name[:-len('.nii.gz')]}.txt").exists()
+    )
+    return jsonify({"ok": True, "atlas_dir": str(atlas_dir), "found": True, "atlases": atlases})
 
 
 @app.route("/api/bids/entities", methods=["POST"])
