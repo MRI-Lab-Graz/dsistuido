@@ -1406,32 +1406,37 @@ class DSIStudioPipeline:
 
         # Compute differences
         diff_groups = {} # key: "ses-2_minus_ses-1", value: [diff_fib1, diff_fib2...]
-        
-        self.logger.info("Checking for longitudinal data...")
-        for sub_id, sessions in subject_fibs.items():
-            if len(sessions) < 2:
-                continue
-            
-            # Sort sessions to identify baseline (earliest)
-            sorted_sessions = sorted(sessions.keys())
-            baseline_ses = sorted_sessions[0]
-            baseline_fib = sessions[baseline_ses]
-            
-            self.logger.info(f"Subject {sub_id} has {len(sessions)} sessions. Baseline: {baseline_ses}")
-            
-            for followup_ses in sorted_sessions[1:]:
-                diff_fib = self.generate_longitudinal_diff(baseline_fib, sessions[followup_ses])
-                if diff_fib:
-                    self.stats["diff_ok"] += 1
-                    group_key = f"{followup_ses}_minus_{baseline_ses}"
-                    if group_key not in diff_groups:
-                        diff_groups[group_key] = []
-                    diff_groups[group_key].append(diff_fib)
-                else:
-                    self.stats["diff_failed"] += 1
-                    error_msg = f"Differential FIB failed: {sub_id} {followup_ses} - {baseline_ses}"
-                    self.stats["errors"].append(error_msg)
-                    self.logger.warning(error_msg)
+
+        # GQI (method 4) reconstructs in native space — each session has its own brain mask,
+        # so voxel arrays are not index-aligned and cannot be subtracted directly.
+        if str(self.method) == '4':
+            self.logger.info("Skipping longitudinal diff: GQI (method 4) is native space — brain masks differ per session, subtraction is not valid.")
+        else:
+            self.logger.info("Checking for longitudinal data...")
+            for sub_id, sessions in subject_fibs.items():
+                if len(sessions) < 2:
+                    continue
+
+                # Sort sessions to identify baseline (earliest)
+                sorted_sessions = sorted(sessions.keys())
+                baseline_ses = sorted_sessions[0]
+                baseline_fib = sessions[baseline_ses]
+
+                self.logger.info(f"Subject {sub_id} has {len(sessions)} sessions. Baseline: {baseline_ses}")
+
+                for followup_ses in sorted_sessions[1:]:
+                    diff_fib = self.generate_longitudinal_diff(baseline_fib, sessions[followup_ses])
+                    if diff_fib:
+                        self.stats["diff_ok"] += 1
+                        group_key = f"{followup_ses}_minus_{baseline_ses}"
+                        if group_key not in diff_groups:
+                            diff_groups[group_key] = []
+                        diff_groups[group_key].append(diff_fib)
+                    else:
+                        self.stats["diff_failed"] += 1
+                        error_msg = f"Differential FIB failed: {sub_id} {followup_ses} - {baseline_ses}"
+                        self.stats["errors"].append(error_msg)
+                        self.logger.warning(error_msg)
 
         # Create longitudinal databases
         for group_key, group_fibs in diff_groups.items():
