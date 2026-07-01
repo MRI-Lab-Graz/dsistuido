@@ -385,6 +385,37 @@ def build_pipeline_command(payload: Dict) -> List[str]:
     return cmd
 
 
+def build_qa_command(payload: Dict) -> List[str]:
+    if not payload.get("source_dir"):
+        raise ValueError("Missing required field: source_dir")
+
+    cmd = [
+        sys.executable,
+        str(SCRIPTS_DIR / "qa" / "run_qc.py"),
+        payload["source_dir"],
+    ]
+
+    optional_args = {
+        "output_dir": "--output_dir",
+        "dsi_studio_cmd": "--dsi_studio_cmd",
+        "min_coherence": "--min_coherence",
+        "min_r2": "--min_r2",
+    }
+    for field, flag in optional_args.items():
+        value = payload.get(field)
+        if value not in (None, ""):
+            cmd.extend([flag, str(value)])
+
+    if payload.get("check_btable") in (0, 1, "0", "1", False, True):
+        cmd.extend(["--check_btable", "1" if payload["check_btable"] else "0"])
+
+    for flag in ["apptainer", "skip_src", "skip_fib"]:
+        if payload.get(flag):
+            cmd.append(f"--{flag}")
+
+    return cmd
+
+
 def build_connectometry_command(payload: Dict) -> List[str]:
     if not payload.get("config"):
         raise ValueError("Missing required field: config")
@@ -517,6 +548,19 @@ def api_health():
         "app": APP_SIGNATURE,
         "server_time": datetime.now(timezone.utc).isoformat(),
     })
+
+
+@app.route("/api/run/qa", methods=["POST"])
+def api_run_qa():
+    try:
+        payload = _get_json_payload()
+        cmd = build_qa_command(payload)
+        job = launch_job(cmd, job_type="qa", cwd=REPO_DIR, project_root=payload.get("project_root"))
+        return jsonify({"ok": True, "job": job, "cmd": cmd})
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    except Exception as exc:  # noqa: BLE001
+        return _json_error(str(exc), 400)
 
 
 @app.route("/api/run/connectometry", methods=["POST"])

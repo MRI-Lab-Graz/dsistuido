@@ -294,17 +294,32 @@
     const refreshJobsBtn = document.getElementById('refreshJobsBtn');
     const PROJECT_KEY = 'dsi_web_current_project';
 
-    async function fetchJson(url, payload, method = 'POST') {
+    async function fetchJson(url, payload, method = 'POST', timeoutMs = null) {
         const opts = { method, headers: { 'Content-Type': 'application/json' } };
         if (payload !== undefined && method !== 'GET') {
             opts.body = JSON.stringify(payload);
         }
-        const response = await fetch(url, opts);
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(data.error || 'Request failed');
+        let timeoutId;
+        if (timeoutMs) {
+            const controller = new AbortController();
+            opts.signal = controller.signal;
+            timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         }
-        return data;
+        try {
+            const response = await fetch(url, opts);
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Request failed');
+            }
+            return data;
+        } catch (error) {
+            if (error.name === 'AbortError') {
+                throw new Error(`Request timed out after ${timeoutMs}ms - the target path may be on a slow or disconnected drive.`);
+            }
+            throw error;
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+        }
     }
 
     function notify(message, isError = false) {
@@ -532,8 +547,10 @@
 
     async function loadPickerEntries(path) {
         clearPickerError();
+        pickerRoots.innerHTML = '';
+        pickerEntriesBody.innerHTML = '<tr><td colspan="3" class="text-muted"><i class="fas fa-spinner fa-spin me-2"></i>Loading...</td></tr>';
         try {
-            const data = await fetchJson('/api/fs/list', { path, mode: pickerMode });
+            const data = await fetchJson('/api/fs/list', { path, mode: pickerMode }, 'POST', 10000);
             pickerCurrentPath = data.cwd;
             pickerPathInput.value = data.cwd;
             const roots = data.roots || [];
@@ -570,6 +587,7 @@
                 });
             });
         } catch (error) {
+            pickerEntriesBody.innerHTML = '';
             showPickerError(error.message);
         }
     }
