@@ -3,13 +3,26 @@
 Run DSI Studio's built-in QC (--action=qc) over SRC (.sz/.src.gz) and/or FIB
 (.fz) files in a directory, and flag files worth a second look.
 
+If source_dir has "src" and/or "fib" subfolders (the flat aggregate layout
+dsi_studio_pipeline.py always creates under its output_dir), those are searched
+instead of source_dir itself -- so pointing this at a pipeline's top-level
+output_dir just works. Otherwise source_dir is searched directly (e.g. pointing
+straight at .../src).
+
+FIB is checked in two separate passes, since the pipeline's DataLad mode writes
+GQI reconstructions only into each subject's own sub-*/fib/ folder while QSDR
+reconstructions go into the flat fib/ folder -- the two are not duplicates of
+each other, so a single flat-folder pass silently misses one of them:
+    - fz_qc_qsdr.tsv: the flat fib/ folder (or source_dir if pointed there directly)
+    - fz_qc_gqi.tsv:  every sub-*/fib/*.fz under source_dir
+
 Wraps:
-    dsi_studio --action=qc --source=*.sz,*.src.gz --check_btable=1 --output=<sz_qc.tsv>
-    dsi_studio --action=qc --source=*.fz --output=<fz_qc.tsv>
+    dsi_studio --action=qc --source=<file1,file2,...> --check_btable=1 --output=<sz_qc.tsv>
+    dsi_studio --action=qc --source=<file1,file2,...> --output=<fz_qc_*.tsv>
 
 Usage:
-    python scripts/qa/run_qc.py /data/local/134_AF19/derivatives/dsistudio/src
-    python scripts/qa/run_qc.py /data/local/122_AF17/derivatives/fz --skip_src
+    python scripts/qa/run_qc.py /data/local/134_AF19/derivatives/dsistudio
+    python scripts/qa/run_qc.py /data/local/122_AF17/derivatives/dsistudio/fib --skip_src
     python scripts/qa/run_qc.py /path/to/dir --apptainer --output_dir tmp/qc
 """
 
@@ -17,7 +30,13 @@ import argparse
 import csv
 import subprocess
 import sys
+from collections import deque
 from pathlib import Path
+
+# stdout is piped to a log file (not a TTY) when run from the web GUI, which
+# makes Python fully block-buffer it instead of flushing per line -- progress
+# prints below would otherwise sit invisible until the whole script exits.
+sys.stdout.reconfigure(line_buffering=True)
 
 DEFAULT_DSI_STUDIO_CMD = "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio"
 APPTAINER_WRAPPER = Path(__file__).resolve().parents[2] / "installation" / "apptainer" / "run_dsi_studio.sh"
@@ -26,17 +45,75 @@ SRC_PATTERNS = ["*.sz", "*.src.gz"]
 FIB_PATTERNS = ["*.fz"]
 
 
-def run_qc(dsi_studio_cmd, source_dir: Path, patterns, output_path: Path, check_btable: bool):
-    source_glob = ",".join(str(source_dir / p) for p in patterns)
-    cmd = [dsi_studio_cmd, "--action=qc", f"--source={source_glob}", f"--output={output_path}"]
+def resolve_search_dir(source_dir: Path, subdir_name: str, patterns) -> Path:
+    """Prefer the pipeline's dedicated aggregate subfolder (e.g. <output_dir>/src)
+    over source_dir itself, so pointing QC at the pipeline's top-level output_dir
+    finds files without recursing into every per-subject folder."""
+    subdir = source_dir / subdir_name
+    if subdir.is_dir() and any(subdir.glob(p) for p in patterns):
+        return subdir
+    return source_dir
+
+
+def find_files(directory: Path, patterns):
+    """Files directly inside directory (non-recursive), skipping broken symlinks
+    (e.g. DataLad/git-annex content that hasn't been fetched yet). Used only to
+    count matches and decide whether to run a pass -- the actual --source we
+    hand to dsi_studio is a short wildcard pattern, not this expanded list (see
+    run_qc: passing hundreds of comma-joined literal paths overflows a
+    filesystem path-length check inside dsi_studio itself)."""
+    return sorted({f for p in patterns for f in directory.glob(p) if f.exists()})
+
+
+def find_subject_files(source_dir: Path, subdir_name: str, patterns):
+    """Files one level under every sub-*/<subdir_name>/ folder (the DataLad
+    per-subject layout), skipping broken symlinks. Counting only, see find_files."""
+    return sorted({f for p in patterns for f in source_dir.glob(f"sub-*/{subdir_name}/{p}") if f.exists()})
+
+
+def run_qc(dsi_studio_cmd, source_patterns, output_path: Path, check_btable: bool, file_count: int):
+    # dsi_studio does its own wildcard expansion, so keep --source short (a few
+    # glob patterns) rather than passing every matched file individually --
+    # with a few hundred files that would overflow a filesystem path-length
+    # check inside dsi_studio and it fails with "File name too long" without
+    # writing any output.
+    source_arg = ",".join(str(p) for p in source_patterns)
+    cmd = [dsi_studio_cmd, "--action=qc", f"--source={source_arg}", f"--output={output_path}"]
     if check_btable:
         cmd.append("--check_btable=1")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Stream dsi_studio's own progress live instead of capturing it silently --
+    # a single QC pass can take minutes, and without this the web GUI's live
+    # job log shows nothing at all until the whole pass finishes. Keep a
+    # rolling tail for the error message if it fails.
+    tail = deque(maxlen=200)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        tail.append(line)
+    proc.wait()
+
     if not output_path.exists():
-        sys.stderr.write(result.stdout[-2000:] + result.stderr[-2000:])
-        raise RuntimeError(f"dsi_studio qc produced no output for {source_dir} ({patterns})")
-    return result
+        sys.stderr.write("".join(tail)[-2000:])
+        raise RuntimeError(f"dsi_studio qc produced no output for {file_count} file(s)")
+    return proc
+
+
+def dereference_report_filenames(report_path: Path, files):
+    """dsi_studio resolves symlinks before reporting a file, so DataLad/git-annex
+    per-subject files show up in the FileName column as their opaque annex
+    object name (e.g. MD5E-s...-<hash>.gqi.fz) instead of the friendly
+    sub-XXXX_ses-Y name. Rewrite the report in place using the resolved name of
+    each file we actually queried to map back to its original filename."""
+    resolved_to_friendly = {f.resolve().name: f.name for f in files}
+    with open(report_path, newline="") as f:
+        rows = list(csv.reader(f, delimiter="\t"))
+    for row in rows[1:]:
+        if row and row[0] in resolved_to_friendly:
+            row[0] = resolved_to_friendly[row[0]]
+    with open(report_path, "w", newline="") as f:
+        csv.writer(f, delimiter="\t").writerows(rows)
 
 
 def load_tsv(path: Path):
@@ -57,12 +134,18 @@ def summarize_src(rows):
 
 
 def summarize_fib(rows, min_coherence, min_r2):
+    # R2 (QSDR) is only reported for QSDR reconstructions -- GQI rows leave it
+    # blank. Treating a blank as 0 would flag every GQI file as failing R2,
+    # which isn't a real signal, so only apply the R2 threshold when a value
+    # was actually reported.
     flagged = []
     for row in rows:
         coherence = float(row.get("Coherence Index") or 0)
-        r2 = float(row.get("R2 (QSDR)") or 0)
-        if coherence < min_coherence or r2 < min_r2:
-            flagged.append((row["FileName"], coherence, r2))
+        r2_raw = row.get("R2 (QSDR)")
+        low_coherence = coherence < min_coherence
+        low_r2 = bool(r2_raw) and float(r2_raw) < min_r2
+        if low_coherence or low_r2:
+            flagged.append((row["FileName"], coherence, float(r2_raw) if r2_raw else None))
     return flagged
 
 
@@ -88,32 +171,41 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.skip_src:
-        src_files = [f for p in SRC_PATTERNS for f in source_dir.glob(p)]
+        src_dir = resolve_search_dir(source_dir, "src", SRC_PATTERNS)
+        src_files = find_files(src_dir, SRC_PATTERNS)
         if src_files:
             out_path = output_dir / "sz_qc.tsv"
-            print(f"Running SRC QC on {len(src_files)} file(s) -> {out_path}")
-            run_qc(dsi_studio_cmd, source_dir, SRC_PATTERNS, out_path, bool(args.check_btable))
+            print(f"Running SRC QC on {len(src_files)} file(s) in {src_dir} -> {out_path}")
+            src_patterns = [src_dir / p for p in SRC_PATTERNS]
+            run_qc(dsi_studio_cmd, src_patterns, out_path, bool(args.check_btable), len(src_files))
             rows = load_tsv(out_path)
             flagged = summarize_src(rows)
             print(f"  {len(rows)} file(s) checked, {len(flagged)} flagged (bad slices > 0 or outlier)")
             for name, bad_slices, outlier in flagged:
                 print(f"  ⚠️  {name}: bad_slices={bad_slices} outlier={outlier}")
         else:
-            print(f"No .sz/.src.gz files found in {source_dir}, skipping SRC QC")
+            print(f"No .sz/.src.gz files found in {src_dir}, skipping SRC QC")
 
     if not args.skip_fib:
-        fib_files = [f for p in FIB_PATTERNS for f in source_dir.glob(p)]
-        if fib_files:
-            out_path = output_dir / "fz_qc.tsv"
-            print(f"Running FIB QC on {len(fib_files)} file(s) -> {out_path}")
-            run_qc(dsi_studio_cmd, source_dir, FIB_PATTERNS, out_path, check_btable=False)
+        fib_dir = resolve_search_dir(source_dir, "fib", FIB_PATTERNS)
+        fib_passes = [
+            ("QSDR", find_files(fib_dir, FIB_PATTERNS), [fib_dir / p for p in FIB_PATTERNS], output_dir / "fz_qc_qsdr.tsv"),
+            ("GQI", find_subject_files(source_dir, "fib", FIB_PATTERNS), [source_dir / f"sub-*/fib/{p}" for p in FIB_PATTERNS], output_dir / "fz_qc_gqi.tsv"),
+        ]
+        for label, fib_files, fib_patterns, out_path in fib_passes:
+            if not fib_files:
+                print(f"No {label} .fz files found under {source_dir}, skipping {label} FIB QC")
+                continue
+            print(f"Running {label} FIB QC on {len(fib_files)} file(s) -> {out_path}")
+            run_qc(dsi_studio_cmd, fib_patterns, out_path, check_btable=False, file_count=len(fib_files))
+            if label == "GQI":
+                dereference_report_filenames(out_path, fib_files)
             rows = load_tsv(out_path)
             flagged = summarize_fib(rows, args.min_coherence, args.min_r2)
             print(f"  {len(rows)} file(s) checked, {len(flagged)} flagged (Coherence < {args.min_coherence} or R2 < {args.min_r2})")
             for name, coherence, r2 in flagged:
-                print(f"  ⚠️  {name}: coherence={coherence:.3f} r2={r2:.3f}")
-        else:
-            print(f"No .fz files found in {source_dir}, skipping FIB QC")
+                r2_str = f"{r2:.3f}" if r2 is not None else "n/a"
+                print(f"  ⚠️  {name}: coherence={coherence:.3f} r2={r2_str}")
 
 
 if __name__ == "__main__":
