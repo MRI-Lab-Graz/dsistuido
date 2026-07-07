@@ -194,6 +194,7 @@ class DSIStudioPipeline:
 
         self._validate_dsi_studio()
         self._check_cuda_status()
+        self._write_dataset_description()
 
         # Basic counters for a final summary
         self.stats = {
@@ -215,8 +216,10 @@ class DSIStudioPipeline:
         """Validate DSI Studio installation"""
         try:
             result = subprocess.run([self.dsi_studio_cmd, "--version"], capture_output=True, text=True)
-            self.logger.info(f"DSI Studio version: {result.stdout.strip()}")
+            self.dsi_studio_version = result.stdout.strip()
+            self.logger.info(f"DSI Studio version: {self.dsi_studio_version}")
         except Exception as e:
+            self.dsi_studio_version = ""
             self.logger.error(f"DSI Studio command '{self.dsi_studio_cmd}' not found or failed: {e}")
             if not self.dry_run:
                 sys.exit(1)
@@ -242,6 +245,55 @@ class DSIStudioPipeline:
             self.logger.warning("nvidia-smi not found; skipping CUDA check.")
         except Exception as e:
             self.logger.warning(f"CUDA check encountered an issue: {e}")
+
+    def _write_dataset_description(self):
+        """Write a BIDS dataset_description.json at the root of output_dir,
+        marking it as a proper BIDS derivatives dataset - the same
+        convention qsiprep/mriqc already follow for their own derivatives/
+        siblings (DatasetType: "derivative", GeneratedBy, SourceDatasets),
+        so tools that understand BIDS (pybids, other derivatives pipelines)
+        recognize this output correctly instead of it being an anonymous
+        folder of files.
+
+        Written once, only if missing - never overwrites an existing one, in
+        case it's been hand-edited (e.g. Authors/License/Funding added).
+        Unconditional on --datalad: BIDS compliance is a filesystem-level
+        concern independent of whether DataLad tracks it, though when
+        --datalad is on, this file gets picked up by the normal per-run
+        rollup save like everything else under output_dir.
+        """
+        description_path = self.output_dir / "dataset_description.json"
+        if description_path.exists():
+            return
+        if self.dry_run:
+            self.logger.info(f"[dry-run] would write {description_path}")
+            return
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        source_url = self.qsiprep_datalad_source if self.qsiprep_datalad else None
+        description = {
+            "Name": f"DSI Studio derivatives - {self.project_root.name}",
+            "BIDSVersion": "1.9.0",
+            "DatasetType": "derivative",
+            "GeneratedBy": [
+                {
+                    "Name": "DSI Studio",
+                    "Version": self.dsi_studio_version or "unknown",
+                    "CodeURL": "https://github.com/frankyeh/DSI-Studio",
+                }
+            ],
+            "SourceDatasets": [
+                {"URL": source_url or str(self.qsiprep_dir)}
+            ],
+            "HowToAcknowledge": (
+                "Please cite DSI Studio (Yeh et al., Nature Methods 2025, "
+                "doi:10.1038/s41592-025-02762-8)."
+            ),
+        }
+        try:
+            description_path.write_text(json.dumps(description, indent=4) + "\n")
+            self.logger.info(f"Wrote {description_path}")
+        except OSError as e:
+            self.logger.warning(f"Could not write {description_path}: {e}")
 
     def _resolve_apptainer_image(self, explicit_image: Optional[str]):
         """Pick which Apptainer image this project uses, and pin it.
@@ -815,6 +867,34 @@ class DSIStudioPipeline:
         if result.returncode != 0:
             err = (result.stderr or result.stdout).strip()
             self.logger.error(f"datalad containers-run failed: {err[-2000:]}")
+            return False
+        return True
+
+    def _datalad_run_command(self, dataset_dir: Path, cmd: List[str], output_glob: str, message: str) -> bool:
+        """Run an arbitrary host-side command via plain `datalad run` (not
+        `containers-run`) so it's recorded as a single, replayable commit
+        too. Used for commands like the connectivity extractor, which run on
+        the host and happen to call the registered dsi_studio container
+        internally themselves - there's no single container to declare via
+        `-n`, so `containers-run`'s container-registration model doesn't fit,
+        but `datalad run` still captures the exact command, exit code, and
+        declared outputs, and `datalad rerun <commit>` still replays it.
+        """
+        if self.dry_run:
+            self.logger.info(f"[dry-run] datalad run -d {dataset_dir} -- {' '.join(str(c) for c in cmd)}")
+            return True
+        datalad_cmd = [
+            "datalad", "run",
+            "-d", str(dataset_dir),
+            "--explicit", "--expand", "outputs",
+            "-o", output_glob,
+            "-m", message,
+            "--",
+        ] + [str(c) for c in cmd]
+        result = subprocess.run(datalad_cmd, capture_output=True, text=True, cwd=str(dataset_dir))
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip()
+            self.logger.error(f"datalad run failed: {err[-2000:]}")
             return False
         return True
 
@@ -1555,6 +1635,21 @@ class DSIStudioPipeline:
             self.logger.error("Connectivity validation failed - skipping extraction")
             return
 
+        # datalad run needs its declared outputs to live inside the dataset
+        # it's run in - true by construction for the default
+        # connectivity_output_dir (always under output_dir, which
+        # _setup_datalad_superdataset already requires to be inside
+        # project_root), but a user-supplied --connectivity_output_dir could
+        # point outside it, so this is still checked rather than assumed.
+        can_wrap_in_datalad = self.use_datalad and self.project_root in (
+            self.connectivity_output_dir, *self.connectivity_output_dir.parents
+        )
+        if self.use_datalad and not can_wrap_in_datalad:
+            self.logger.warning(
+                f"--connectivity_output_dir ({self.connectivity_output_dir}) is outside project_root - "
+                f"connectivity extraction will run without datalad provenance tracking for this call."
+            )
+
         for fib in fib_files:
             cmd = ["python3", str(extractor)]
             if self.connectivity_config:
@@ -1567,7 +1662,15 @@ class DSIStudioPipeline:
             cmd += ["--reconstruction_method", str(self.method)]
             cmd += [str(fib), str(self.connectivity_output_dir)]
             self.logger.info(f"Launching connectivity extraction for {fib.name}")
-            self.run_command(cmd)
+            if can_wrap_in_datalad:
+                sub_id, ses_id = self._parse_sub_ses(fib)
+                prefix = f"{sub_id}_{ses_id}" if ses_id else sub_id
+                rel_output_dir = self.connectivity_output_dir.relative_to(self.project_root)
+                self._datalad_run_command(
+                    self.project_root, cmd, f"{rel_output_dir}/{prefix}*", f"connectivity: {prefix}"
+                )
+            else:
+                self.run_command(cmd)
 
     def create_database(self, fib_files: List[Path], output_db: Optional[Path] = None, index_name: Optional[str] = None):
         """Create connectometry database from FIB files"""

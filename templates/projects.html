@@ -70,7 +70,7 @@
                 <div class="mb-3">
                     <label class="form-label">Pipeline output directory</label>
                     <div class="input-group path-picker-group" data-picker-mode="dir">
-                        <input class="form-control" id="proj_output" placeholder="/path/to/output" />
+                        <input class="form-control" id="proj_output" placeholder="e.g. <project root>/derivatives/dsistudio - a sibling of derivatives/qsiprep, not a generic name like 'data'" />
                         <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
                     </div>
                 </div>
@@ -430,6 +430,15 @@
             rootInput.value = `/data/local/${studyName}`;
         }
         document.getElementById('proj_qsiprep').value = `${rootInput.value.trim()}/derivatives/qsiprep`;
+
+        // derivatives/dsistudio, not e.g. "data" - a sibling of
+        // derivatives/qsiprep (and derivatives/mriqc, if present) so the
+        // project reads consistently as one family of per-tool derivatives,
+        // matching how qsiprep/DataLad themselves name things.
+        const outputInput = document.getElementById('proj_output');
+        if (!outputInput.value.trim()) {
+            outputInput.value = `${rootInput.value.trim()}/derivatives/dsistudio`;
+        }
 
         window.dsiUi.notify(`Set qsiprep source to ${studyName}. Double-check the project root / QSIPrep directory below before creating the project.`);
         if (modal) modal.hide();
