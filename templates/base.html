@@ -268,6 +268,11 @@
                     <button class="btn btn-outline-secondary" type="button" id="pickerGoBtn">Go</button>
                 </div>
                 <div class="mb-2" id="pickerRoots"></div>
+                <div class="input-group input-group-sm mb-2">
+                    <span class="input-group-text"><i class="fas fa-folder-plus"></i></span>
+                    <input class="form-control" id="pickerNewFolderInput" placeholder="New folder name" />
+                    <button class="btn btn-outline-success" type="button" id="pickerMkdirBtn">Create Folder</button>
+                </div>
                 <div class="table-responsive border rounded">
                     <table class="table table-sm align-middle mb-0">
                         <thead class="table-light">
@@ -527,6 +532,8 @@
     const pickerUpBtn = document.getElementById('pickerUpBtn');
     const pickerGoBtn = document.getElementById('pickerGoBtn');
     const pickerUseCurrentBtn = document.getElementById('pickerUseCurrentBtn');
+    const pickerNewFolderInput = document.getElementById('pickerNewFolderInput');
+    const pickerMkdirBtn = document.getElementById('pickerMkdirBtn');
     const pickerModal = window.bootstrap ? new bootstrap.Modal(pickerModalEl) : null;
 
     function clearPickerError() {
@@ -613,8 +620,31 @@
         });
     }
 
+    async function createPickerFolder() {
+        const name = pickerNewFolderInput.value.trim();
+        if (!name) {
+            showPickerError('Enter a folder name first.');
+            return;
+        }
+        clearPickerError();
+        try {
+            const res = await fetchJson('/api/fs/mkdir', { path: pickerCurrentPath, name });
+            pickerNewFolderInput.value = '';
+            await loadPickerEntries(res.path);
+        } catch (error) {
+            showPickerError(error.message);
+        }
+    }
+
     pickerUpBtn.addEventListener('click', () => loadPickerEntries(pickerPathInput.value.trim() + '/..'));
     pickerGoBtn.addEventListener('click', () => loadPickerEntries(pickerPathInput.value.trim()));
+    pickerMkdirBtn.addEventListener('click', createPickerFolder);
+    pickerNewFolderInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            createPickerFolder();
+        }
+    });
     pickerUseCurrentBtn.addEventListener('click', () => {
         setPickerValue(pickerPathInput.value.trim());
         if (pickerModal) pickerModal.hide();

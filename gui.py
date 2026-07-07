@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -41,10 +42,36 @@ TEMPLATES_DIR = REPO_DIR / "templates"
 LOG_DIR = SCRIPTS_DIR / "web_logs"
 SETTINGS_DIR = SCRIPTS_DIR / "web_settings"
 SERVER_STATE_FILE = SETTINGS_DIR / "webui_server_state.json"
+# Machine-local index of known projects (name/project_root/profile_path only)
+# so the UI can list and re-open them - the actual project data lives in each
+# project's own <project_root>/code/dsistudio/project.json, never here.
+PROJECTS_REGISTRY_FILE = SETTINGS_DIR / "projects_registry.json"
 APP_SIGNATURE = "dsi-studio-webui"
 # Matches the default in scripts/pipeline/dsi_studio_pipeline.py's --dsi_studio_cmd
 # argument, so atlas discovery looks in the same place the pipeline actually runs.
 DEFAULT_DSI_STUDIO_CMD = "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio"
+# installation/install_git_annex.sh's default install location. Job
+# subprocesses need this prepended to PATH explicitly (see launch_job) rather
+# than relying on inherited PATH: the web server's own process environment is
+# whatever it was at server *startup*, which predates this install for any
+# server instance already running when install_git_annex.sh is (re-)run -
+# restarting the server isn't required for jobs to pick up the fix.
+GIT_ANNEX_STANDALONE_BIN = Path("/data/local/software/git-annex-standalone/git-annex.linux")
+# This lab's shared study repository - prefilled as a starting point when
+# browsing for a qsiprep DataLad source on the New Project page, so users
+# don't have to already know/retype the exact host and base path by hand.
+# "host" is an SSH config alias (see installation/SETUP.md), not the bare
+# hostname - DataLad's own SSH wrapper (datalad sshrun) expects a
+# "[user@]hostname" login target with a single '@', which breaks for this
+# lab's email-style accounts (user@domain.tld) if the user is embedded
+# directly in the URL as user@domain.tld@host. The alias keeps the URL
+# DataLad ever sees free of a second '@'; plain SSH (used for browsing below)
+# works fine either way since it isn't affected by that parsing bug.
+DEFAULT_QSIPREP_REMOTE = {
+    "user": "",
+    "host": "mri-it035016",
+    "path": "/datalad/mri/MRI-Lab_Repository",
+}
 
 LOG_DIR.mkdir(exist_ok=True)
 SETTINGS_DIR.mkdir(exist_ok=True)
@@ -188,6 +215,34 @@ def _settings_search_dirs(project_root_value: Optional[str]) -> List[Path]:
     return [project_dir, SETTINGS_DIR] if project_dir else [SETTINGS_DIR]
 
 
+def _load_projects_registry() -> List[Dict]:
+    if not PROJECTS_REGISTRY_FILE.exists():
+        return []
+    try:
+        data = json.loads(PROJECTS_REGISTRY_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save_projects_registry(entries: List[Dict]):
+    PROJECTS_REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PROJECTS_REGISTRY_FILE.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+
+
+def _upsert_project_registry_entry(entry: Dict):
+    """Add or update this machine's project index by project_root - the
+    stable identity for a project. Only a pointer (name/project_root/
+    profile_path) is stored here; the actual profile lives in that project's
+    own folder, never duplicated into the registry.
+    """
+    entries = _load_projects_registry()
+    entries = [e for e in entries if e.get("project_root") != entry["project_root"]]
+    entries.append(entry)
+    entries.sort(key=lambda e: (e.get("name") or e.get("project_root") or "").lower())
+    _save_projects_registry(entries)
+
+
 def _list_directory_entries(path: Path, mode: str) -> Dict:
     """Return sorted directory entries for file/folder picker."""
     target = path
@@ -258,6 +313,19 @@ def find_free_port(start_port: int) -> int:
         port += 1
 
 
+def _job_env() -> Dict[str, str]:
+    """Environment for job subprocesses: inherits this server process's own
+    environment, plus the standalone git-annex build prepended to PATH (see
+    GIT_ANNEX_STANDALONE_BIN) so --qsiprep_datalad works regardless of
+    whether this particular server instance was started before or after
+    installation/install_git_annex.sh was (re-)run.
+    """
+    env = os.environ.copy()
+    if GIT_ANNEX_STANDALONE_BIN.is_dir():
+        env["PATH"] = f"{GIT_ANNEX_STANDALONE_BIN}{os.pathsep}{env.get('PATH', '')}"
+    return env
+
+
 def _run_job(job_id: str, cmd: List[str], cwd: Optional[Path]):
     start_ts = time.time()
     log_file = Path(jobs[job_id]["log_file"])
@@ -271,7 +339,8 @@ def _run_job(job_id: str, cmd: List[str], cwd: Optional[Path]):
             # /api/jobs/<id>/stop can kill all of it together via killpg -
             # killing just this top pid would leave the container running.
             proc = subprocess.Popen(
-                cmd, cwd=str(cwd) if cwd else None, stdout=fh, stderr=fh, start_new_session=True
+                cmd, cwd=str(cwd) if cwd else None, stdout=fh, stderr=fh,
+                start_new_session=True, env=_job_env(),
             )
             with jobs_lock:
                 job_processes[job_id] = proc
@@ -348,6 +417,8 @@ def build_pipeline_command(payload: Dict) -> List[str]:
         "threads": "--threads",
         "db_name": "--db_name",
         "rawdata_dir": "--rawdata_dir",
+        "qsiprep_datalad_source": "--qsiprep_datalad_source",
+        "qsiprep_datalad_branch": "--qsiprep_datalad_branch",
         "min_file_age": "--min_file_age",
         "connectivity_config": "--connectivity_config",
         "connectivity_output_dir": "--connectivity_output_dir",
@@ -376,6 +447,8 @@ def build_pipeline_command(payload: Dict) -> List[str]:
         "connectivity_only",
         "apptainer",
         "datalad",
+        "qsiprep_datalad",
+        "push_derivatives",
     ]
     for flag in bool_flags:
         if payload.get(flag):
@@ -526,6 +599,152 @@ def connectivity_settings_page():
 @app.route("/viewer")
 def viewer_page():
     return render_template("viewer.html", active_page="viewer")
+
+
+@app.route("/api/project/create", methods=["POST"])
+def api_project_create():
+    """Create a new project: makes project_root/output_dir/connectivity
+    output_dir on disk (they're this pipeline's own writable locations) and
+    writes a canonical profile to <project_root>/code/dsistudio/project.json
+    so the project can be reloaded later (e.g. on another machine, or after
+    clearing browser storage) instead of living only in browser localStorage.
+
+    qsiprep_dir and rawdata_dir are treated as read-only *inputs* - they are
+    never created, only checked for existence, since silently mkdir'ing them
+    would mask a genuinely missing/misspelled source dataset.
+    """
+    try:
+        payload = _get_json_payload()
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+
+    project_root_value = str(payload.get("project_root", "")).strip()
+    if not project_root_value:
+        return _json_error("Missing project_root", 400)
+
+    project_root = _resolve_input_path(project_root_value)
+    created = []
+    warnings = []
+
+    try:
+        project_root.mkdir(parents=True, exist_ok=True)
+        created.append(str(project_root))
+
+        output_dir_value = str(payload.get("output_dir", "")).strip()
+        if output_dir_value:
+            output_dir = _resolve_input_path(output_dir_value)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            created.append(str(output_dir))
+
+        connectivity_output_value = str(payload.get("connectivity_output_dir", "")).strip()
+        if connectivity_output_value:
+            connectivity_output_dir = _resolve_input_path(connectivity_output_value)
+            connectivity_output_dir.mkdir(parents=True, exist_ok=True)
+            created.append(str(connectivity_output_dir))
+    except OSError as exc:
+        return _json_error(f"Could not create project folders: {exc}", 500)
+
+    qsiprep_dir_value = str(payload.get("qsiprep_dir", "")).strip()
+    qsiprep_datalad_source = str(payload.get("qsiprep_datalad_source", "")).strip()
+    if qsiprep_dir_value:
+        qsiprep_dir = _resolve_input_path(qsiprep_dir_value)
+        if not qsiprep_dir.exists() and not qsiprep_datalad_source:
+            warnings.append(f"QSIPrep directory does not exist yet: {qsiprep_dir}")
+
+    rawdata_dir_value = str(payload.get("rawdata_dir", "")).strip()
+    if rawdata_dir_value and not _resolve_input_path(rawdata_dir_value).exists():
+        warnings.append(f"Rawdata directory does not exist yet: {rawdata_dir_value}")
+
+    profile_fields = [
+        "name", "project_root", "qsiprep_dir", "qsiprep_datalad", "qsiprep_datalad_source",
+        "qsiprep_datalad_branch", "output_dir", "rawdata_dir", "connectivity_config",
+        "connectivity_output_dir",
+    ]
+    profile = {field: payload.get(field, "") for field in profile_fields}
+    profile["created_at"] = datetime.now(timezone.utc).isoformat()
+
+    profile_dir = project_root / "code" / "dsistudio"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_path = profile_dir / "project.json"
+    with open(profile_path, "w", encoding="utf-8") as fh:
+        json.dump(profile, fh, indent=2)
+
+    _upsert_project_registry_entry({
+        "name": profile.get("name") or project_root.name,
+        "project_root": str(project_root),
+        "profile_path": str(profile_path),
+        "created_at": profile["created_at"],
+    })
+
+    return jsonify({
+        "ok": True,
+        "created": created,
+        "warnings": warnings,
+        "profile_path": str(profile_path),
+        "profile": profile,
+    })
+
+
+@app.route("/api/projects/list", methods=["GET"])
+def api_projects_list():
+    """List projects known on this machine, from the shared registry file -
+    this is only a pointer list (name/project_root/profile_path); the actual
+    project data lives in each project's own project.json. Entries whose
+    profile file has since disappeared (folder moved/deleted) are pruned
+    automatically so the list doesn't accumulate dead links.
+    """
+    entries = _load_projects_registry()
+    kept = [e for e in entries if e.get("profile_path") and Path(e["profile_path"]).exists()]
+    if len(kept) != len(entries):
+        _save_projects_registry(kept)
+    return jsonify(kept)
+
+
+@app.route("/api/projects/register", methods=["POST"])
+def api_projects_register():
+    """Add an existing project (already has its own project.json somewhere)
+    to this machine's registry, without creating any folders - used when a
+    profile is loaded from an arbitrary file path so it becomes easy to find
+    again next time, instead of only living wherever it was browsed from.
+    """
+    try:
+        payload = _get_json_payload()
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+
+    project_root_value = str(payload.get("project_root", "")).strip()
+    profile_path_value = str(payload.get("profile_path", "")).strip()
+    if not project_root_value or not profile_path_value:
+        return _json_error("Missing project_root or profile_path", 400)
+
+    _upsert_project_registry_entry({
+        "name": str(payload.get("name") or "").strip() or Path(project_root_value).name,
+        "project_root": str(_resolve_input_path(project_root_value)),
+        "profile_path": str(_resolve_input_path(profile_path_value)),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return jsonify({"ok": True})
+
+
+@app.route("/api/projects/forget", methods=["POST"])
+def api_projects_forget():
+    """Remove a project from this machine's registry list only - never
+    touches the project's own files (project.json, data, output, etc), so
+    it's always recoverable by loading/creating the project again.
+    """
+    try:
+        payload = _get_json_payload()
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+
+    project_root_value = str(payload.get("project_root", "")).strip()
+    if not project_root_value:
+        return _json_error("Missing project_root", 400)
+
+    entries = _load_projects_registry()
+    remaining = [e for e in entries if e.get("project_root") != project_root_value]
+    _save_projects_registry(remaining)
+    return jsonify({"ok": True, "count": len(remaining)})
 
 
 @app.route("/api/run/pipeline", methods=["POST"])
@@ -746,6 +965,90 @@ def api_fs_list():
         return jsonify({"ok": True, **result})
     except Exception as exc:  # noqa: BLE001
         return _json_error(str(exc), 400)
+
+
+@app.route("/api/fs/mkdir", methods=["POST"])
+def api_fs_mkdir():
+    """Create a new folder from the path picker, so choosing a brand-new
+    project root/output dir doesn't require dropping out to a terminal first.
+    """
+    try:
+        payload = _get_json_payload()
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        return _json_error("Missing folder name", 400)
+    if "/" in name or "\\" in name:
+        return _json_error("Folder name cannot contain path separators", 400)
+
+    parent = _resolve_input_path(str(payload.get("path", "")).strip())
+    target = parent / name
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return _json_error(f"Could not create folder: {exc}", 500)
+
+    return jsonify({"ok": True, "path": str(target)})
+
+
+@app.route("/api/remote/ssh_default", methods=["GET"])
+def api_remote_ssh_default():
+    """This lab's known-good default SSH source (host/user/base path), so
+    the New Project page can prefill the remote browser instead of everyone
+    re-typing the same host and path by hand.
+    """
+    return jsonify({"ok": True, **DEFAULT_QSIPREP_REMOTE})
+
+
+@app.route("/api/remote/ssh_list", methods=["POST"])
+def api_remote_ssh_list():
+    """List directories at a path on a remote host over SSH (read-only) -
+    lets the New Project page browse e.g. MRI-Lab_Repository for the right
+    study without already knowing the exact folder name. Requires
+    passwordless (key-based) SSH access to already be set up; this only
+    ever runs a read-only 'find', never writes anything remotely.
+    """
+    try:
+        payload = _get_json_payload()
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+
+    user = str(payload.get("user", "")).strip()
+    host = str(payload.get("host", "")).strip()
+    path = str(payload.get("path", "")).strip() or "/"
+    if not host:
+        return _json_error("Missing host", 400)
+
+    # user is optional: an SSH config alias (Host block) can supply it
+    # instead, which is required anyway for DataLad's own SSH wrapper to
+    # work with email-style ("user@domain.tld") logins - see SETUP.md.
+    target = f"{user}@{host}" if user else host
+    remote_cmd = f"find {shlex.quote(path)} -mindepth 1 -maxdepth 1 -printf '%f\\t%y\\n' 2>/dev/null | sort"
+    try:
+        result = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", target, remote_cmd],
+            capture_output=True, text=True, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return _json_error(f"SSH to {target} timed out", 504)
+    except Exception as exc:  # noqa: BLE001
+        return _json_error(str(exc), 500)
+
+    if result.returncode != 0:
+        return _json_error(f"SSH to {target} failed: {(result.stderr or result.stdout).strip()[-500:]}", 502)
+
+    entries = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 2:
+            continue
+        name, ftype = parts
+        entries.append({"name": name, "is_dir": ftype == "d"})
+    entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+
+    return jsonify({"ok": True, "user": user, "host": host, "path": path, "entries": entries})
 
 
 @app.route("/api/fs/read_json", methods=["POST"])

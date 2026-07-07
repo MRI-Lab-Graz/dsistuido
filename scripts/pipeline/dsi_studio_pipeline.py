@@ -27,6 +27,7 @@ import gzip
 import shutil
 import csv
 import json
+import shlex
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple, Dict
@@ -86,6 +87,21 @@ class DSIStudioPipeline:
             self.project_root = self.output_dir.parent.parent
         else:
             self.project_root = self.output_dir.parent
+
+        # Read qsiprep-DataLad settings and (if needed) clone the source
+        # *before* any mkdir happens below - 'datalad clone'/'git clone'
+        # refuse to clone into an existing non-empty directory, and
+        # self.code_dir.mkdir() a few lines down would otherwise pre-create
+        # project_root (making it non-empty) before we ever get a chance to
+        # clone into it.
+        self.qsiprep_datalad_source = args.qsiprep_datalad_source
+        self.qsiprep_datalad = args.qsiprep_datalad or bool(self.qsiprep_datalad_source)
+        self.qsiprep_datalad_branch = args.qsiprep_datalad_branch
+        if self.qsiprep_datalad:
+            self._qsiprep_clone_root = self._ensure_qsiprep_clone()
+        else:
+            self._qsiprep_clone_root = None
+
         self.code_dir = self.project_root / "code" / "dsistudio"
         self.code_dir.mkdir(parents=True, exist_ok=True)
 
@@ -138,6 +154,13 @@ class DSIStudioPipeline:
         self.connectivity_output_dir = Path(args.connectivity_output_dir).resolve() if args.connectivity_output_dir else self.output_dir / "connectivity"
         self.connectivity_threads = args.connectivity_threads
 
+        # (qsiprep_datalad/qsiprep_datalad_source/qsiprep_datalad_branch were
+        # already read above, before project_root's directories were created.)
+        # Opt-in, explicit push of *only* this run's own output subtree to
+        # its remote - never touches qsiprep or any sibling dataset, and
+        # never runs unless the user asks for it on this specific invocation.
+        self.push_derivatives = args.push_derivatives
+
         # Optional rawdata path for cross-checking
         if args.rawdata_dir:
             self.rawdata_dir = Path(args.rawdata_dir).resolve()
@@ -145,21 +168,21 @@ class DSIStudioPipeline:
             # Default: sibling rawdata directory
             self.rawdata_dir = self.qsiprep_dir.parent / "rawdata"
         
-        self.src_dir = self.output_dir / "src"
-        self.fib_dir = self.output_dir / "fib"
-        self.diff_dir = self.output_dir / "diff"
-        self.reports_dir = self.output_dir / "reports"
-        
-        self.src_dir.mkdir(parents=True, exist_ok=True)
-        self.fib_dir.mkdir(parents=True, exist_ok=True)
-        self.diff_dir.mkdir(parents=True, exist_ok=True)
-        self.reports_dir.mkdir(parents=True, exist_ok=True)
+        # Per-subject output is always nested as <output_dir>/<subject_id>/
+        # {src,fib,diff,reports}/... - this mirrors how qsiprep/DataLad
+        # themselves organize per-subject data, and keeps one layout whether
+        # or not --datalad is on (--datalad additionally makes each subject
+        # folder its own nested DataLad dataset; without it, they're just
+        # plain directories). See _ensure_subject_dir().
         self.connectivity_output_dir.mkdir(parents=True, exist_ok=True)
         
         self.logger = setup_logging(self.output_dir)
         self.logger.info(f"Starting DSI Studio Pipeline")
         self.logger.info(f"QSIPREP Dir: {self.qsiprep_dir}")
         self.logger.info(f"Output Dir: {self.output_dir}")
+
+        if self.qsiprep_datalad:
+            self._setup_qsiprep_datalad()
 
         pin_file_preexisted = (self.code_dir / "dsi_studio_image.json").exists()
 
@@ -373,21 +396,401 @@ class DSIStudioPipeline:
                 capture_output=True, text=True
             )
 
-    def _ensure_subject_dataset(self, subject_id: str) -> Path:
-        """Return the nested DataLad dataset for one subject, creating it as
-        a proper nested dataset of the project superdataset and registering
-        the container in it on first use.
+    def _checkout_datalad_branch(self, path: Path, branch: str) -> bool:
+        """Checkout `branch` in the git repo at `path` if it exists there (as
+        a local or remote-tracking ref) and isn't already checked out.
+        Returns whether the branch was found, so callers can tell "already
+        on it" / "checked out" apart from "this dataset doesn't use that
+        branch at all" - not every dataset in a hierarchy necessarily does.
+
+        May run before self.logger exists (called from _ensure_qsiprep_clone
+        at the very top of __init__), so it falls back to print() then.
         """
-        subject_dir = self.output_dir / subject_id
-        if not (subject_dir / ".datalad").exists():
-            self.logger.info(f"Creating nested DataLad dataset for {subject_id}")
-            result = subprocess.run(
-                ["datalad", "create", "-d", str(self.project_root), str(subject_dir)],
+        log = getattr(self, "logger", None)
+
+        current = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True
+        )
+        if current.returncode == 0 and current.stdout.strip() == branch:
+            return True
+        has_branch = any(
+            subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "--verify", "--quiet", ref],
+                capture_output=True, text=True
+            ).returncode == 0
+            for ref in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}")
+        )
+        if not has_branch:
+            return False
+        result = subprocess.run(
+            ["git", "-C", str(path), "checkout", branch],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip()[-300:]
+            msg = f"Could not checkout '{branch}' in {path}: {err}"
+            log.warning(msg) if log else print(f"WARNING: {msg}", file=sys.stderr)
+        else:
+            msg = f"Checked out '{branch}' branch in {path}"
+            log.info(msg) if log else print(msg)
+        return True
+
+    def _checkout_datalad_branch_in_subdatasets(self, root: Path, branch: str):
+        """Recursively checkout `branch` in every already-installed subdataset
+        beneath `root` (root itself isn't touched here - callers handle that
+        separately). Needed because a subdataset's pinned commit in its
+        parent's tree can be stale (e.g. still pointing at an empty initial
+        commit) even once that subdataset's own '{branch}' has real data -
+        each level is independent and has to be checked out explicitly, it
+        isn't inherited from the parent's checkout.
+        """
+        branch_q = shlex.quote(branch)
+        shell_cmd = (
+            f"(git rev-parse --verify --quiet refs/remotes/origin/{branch_q} >/dev/null 2>&1 "
+            f"|| git rev-parse --verify --quiet refs/heads/{branch_q} >/dev/null 2>&1) || exit 0; "
+            f"[ \"$(git rev-parse --abbrev-ref HEAD)\" = {branch_q} ] && exit 0; "
+            f"git checkout {branch_q} >/dev/null 2>&1"
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "submodule", "foreach", "--recursive", "--quiet", shell_cmd],
+            capture_output=True, text=True
+        )
+
+    def _fix_stale_annex_remote(self, path: Path, expected_url: Optional[str] = None):
+        """Heal a repo's 'origin' remote left in a broken state by an earlier
+        attempt: update the URL if it doesn't match `expected_url`, and clear
+        a stale annex-ignore flag. A prior run using an old git-annex, or a
+        source URL git-annex couldn't parse, can permanently set
+        annex-ignore=true and/or leave the wrong URL in this repo's local
+        git config - fixing the git-annex version or URL afterwards does not
+        retroactively clear either one, so this is re-checked every run
+        rather than only at first clone.
+        """
+        log = getattr(self, "logger", None)
+
+        if expected_url:
+            current = subprocess.run(
+                ["git", "-C", str(path), "remote", "get-url", "origin"],
                 capture_output=True, text=True
             )
-            if result.returncode != 0:
-                self.logger.error(f"datalad create for {subject_id} failed: {result.stderr.strip()}")
-        self._register_datalad_container(subject_dir)
+            if current.returncode == 0 and current.stdout.strip() != expected_url:
+                subprocess.run(
+                    ["git", "-C", str(path), "remote", "set-url", "origin", expected_url],
+                    capture_output=True, text=True
+                )
+                msg = f"Updated stale 'origin' URL in {path}: {current.stdout.strip()} -> {expected_url}"
+                log.info(msg) if log else print(msg)
+
+        ignore = subprocess.run(
+            ["git", "-C", str(path), "config", "--get", "remote.origin.annex-ignore"],
+            capture_output=True, text=True
+        )
+        if ignore.returncode == 0 and ignore.stdout.strip() == "true":
+            subprocess.run(
+                ["git", "-C", str(path), "config", "--unset", "remote.origin.annex-ignore"],
+                capture_output=True, text=True
+            )
+            msg = f"Cleared stale annex-ignore flag on 'origin' in {path} (left over from an earlier attempt)"
+            log.info(msg) if log else print(msg)
+
+    def _resync_installed_subdataset_remotes(self, root: Path):
+        """Recursively heal 'origin' on every already-installed subdataset
+        beneath `root` (root itself is handled by the caller): recompute
+        each one's expected URL from its .gitmodules-registered relative URL
+        resolved against its own immediate (already-healed) parent, then
+        apply the same annex-ignore/URL fix as _fix_stale_annex_remote.
+        Subdatasets installed by an earlier, broken attempt can be stuck
+        pointing at a URL resolved against a since-corrected parent, which
+        persists even after the parent itself is fixed.
+        """
+        gitmodules = root / ".gitmodules"
+        if not gitmodules.exists():
+            return
+        parent_url_result = subprocess.run(
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            capture_output=True, text=True
+        )
+        if parent_url_result.returncode != 0:
+            return
+        parent_url = parent_url_result.stdout.strip()
+
+        paths_result = subprocess.run(
+            ["git", "config", "--file", str(gitmodules), "--get-regexp", r"^submodule\..*\.path$"],
+            capture_output=True, text=True
+        )
+        if paths_result.returncode != 0:
+            return
+
+        for line in paths_result.stdout.splitlines():
+            key, _, rel_path = line.partition(" ")
+            if not rel_path:
+                continue
+            name = key[len("submodule."):-len(".path")]
+            sub_path = root / rel_path
+            if not (sub_path / ".git").exists():
+                continue  # not installed yet - nothing to fix
+
+            url_result = subprocess.run(
+                ["git", "config", "--file", str(gitmodules), "--get", f"submodule.{name}.url"],
+                capture_output=True, text=True
+            )
+            registered_url = url_result.stdout.strip() if url_result.returncode == 0 else ""
+            expected_child_url = (
+                parent_url.rstrip("/") + "/" + registered_url[2:]
+                if registered_url.startswith("./") else None
+            )
+            self._fix_stale_annex_remote(sub_path, expected_url=expected_child_url)
+            self._resync_installed_subdataset_remotes(sub_path)
+
+    @staticmethod
+    def _is_derivatives_sibling(child: Path, root: Path) -> bool:
+        """True if `child` looks like <root>/derivatives/<something> - the
+        layout this lab uses for per-tool sibling subdatasets
+        (derivatives/qsiprep, derivatives/dsistudio, derivatives/mriqc, ...).
+
+        Deliberately narrower than "child is somewhere under root": almost
+        any reasonable directory layout has qsiprep_dir nested somewhere
+        under project_root (e.g. both under the same study folder) without
+        that meaning they're part of the same DataLad dataset - only the
+        specific 'derivatives/' convention implies that.
+        """
+        try:
+            parts = child.relative_to(root).parts
+        except ValueError:
+            return False
+        return len(parts) >= 2 and parts[0] == "derivatives"
+
+    def _ensure_qsiprep_clone(self) -> Optional[Path]:
+        """Clone the qsiprep DataLad source if it isn't present locally yet.
+
+        Called at the very top of __init__, before project_root or any of
+        its subdirectories are created - 'datalad clone'/'git clone' refuse
+        to clone into an existing non-empty directory, and self.code_dir's
+        mkdir a few lines later would otherwise pre-create project_root
+        (making it non-empty) before we ever get a chance to clone into it.
+        No self.logger exists yet at this point, so failures print directly.
+
+        Also checks out self.qsiprep_datalad_branch at the top level here
+        (not just later in _setup_qsiprep_datalad()) - our own later mkdir
+        calls for project_root's subdirectories (code_dir, output_dir, etc.)
+        would otherwise create a plain untracked 'derivatives' folder before
+        we get a chance to check out a branch also named 'derivatives',
+        which git then refuses to disambiguate ("could be both a local file
+        and a tracking branch").
+
+        Handles the shared per-study layout (a study superdataset with e.g.
+        derivatives/qsiprep and derivatives/dsistudio as sibling
+        subdatasets): if qsiprep_dir is <project_root>/derivatives/<x>,
+        project_root is what gets cloned, and qsiprep_dir is just a
+        subdataset path within it, installed later in
+        _setup_qsiprep_datalad(). Otherwise qsiprep_dir is cloned directly
+        as its own independent dataset.
+        """
+        if self._is_derivatives_sibling(self.qsiprep_dir, self.project_root):
+            clone_root = self.project_root
+            # A source URL pointing at qsiprep itself (e.g. picked via a
+            # remote browser that was drilled all the way down to
+            # ".../derivatives/qsiprep" instead of stopping at the study
+            # folder) would, if used as-is here, clone the wrong thing -
+            # only the qsiprep subdataset, flattened directly onto
+            # project_root, instead of the whole study with qsiprep nested
+            # inside it. Strip that matching suffix so the study-level
+            # parent gets cloned instead.
+            if self.qsiprep_datalad_source:
+                rel = str(self.qsiprep_dir.relative_to(self.project_root)).replace(os.sep, "/")
+                source = self.qsiprep_datalad_source.rstrip("/")
+                if source.endswith("/" + rel):
+                    corrected = source[: -(len(rel) + 1)]
+                    print(
+                        f"NOTE: --qsiprep_datalad_source pointed at qsiprep itself "
+                        f"({self.qsiprep_datalad_source}) but qsiprep_dir is nested under "
+                        f"project_root - cloning its study-level parent instead: {corrected}"
+                    )
+                    self.qsiprep_datalad_source = corrected
+        else:
+            clone_root = self.qsiprep_dir
+
+        if clone_root.exists() and (clone_root / ".datalad").exists():
+            # An earlier attempt (old git-annex, or a URL git-annex couldn't
+            # parse) can leave 'origin' pointed at a stale URL and/or
+            # permanently flagged annex-ignore=true in this already-cloned
+            # repo's local git config - upgrading git-annex or fixing the
+            # source URL afterwards doesn't retroactively clear either, so a
+            # previously-poisoned clone stays broken forever unless this is
+            # re-checked (and healed) on every run, not just at first clone.
+            self._fix_stale_annex_remote(clone_root, expected_url=self.qsiprep_datalad_source)
+            self._checkout_datalad_branch(clone_root, self.qsiprep_datalad_branch)
+            return clone_root
+
+        if not self.qsiprep_datalad_source:
+            print(
+                f"ERROR: --qsiprep_datalad requires {clone_root} to already be a DataLad "
+                f"dataset, or --qsiprep_datalad_source to clone it from. Disabling qsiprep "
+                f"DataLad handling for this run.",
+                file=sys.stderr,
+            )
+            self.qsiprep_datalad = False
+            return None
+
+        # When clone_root == project_root, the web UI's "Create Project" step
+        # (or an earlier run of this same script) may have already created
+        # <project_root>/code/dsistudio/* (profile, presets, logs) before
+        # this run - 'datalad clone' refuses to clone into a non-empty
+        # directory. If that known, self-authored scaffold is the *only*
+        # thing there, move it aside and merge it back in after cloning
+        # instead of failing or silently losing it. Anything else present
+        # is unexpected content we shouldn't move/delete automatically.
+        scaffold_backup = None
+        if clone_root.exists() and not (clone_root / ".datalad").exists():
+            entries = list(clone_root.iterdir())
+            if entries and [e.name for e in entries] != ["code"]:
+                unexpected = ", ".join(sorted(e.name for e in entries))
+                print(
+                    f"ERROR: {clone_root} already exists with content ({unexpected}) but isn't "
+                    f"a DataLad dataset yet - refusing to clone into it. Move or remove this "
+                    f"content manually, or use a different project_root.",
+                    file=sys.stderr,
+                )
+                self.qsiprep_datalad = False
+                return None
+            if entries:  # exactly ["code"] - our own scaffold, safe to move aside
+                scaffold_backup = clone_root.parent / f".{clone_root.name}.dsistudio_scaffold_backup"
+                if scaffold_backup.exists():
+                    shutil.rmtree(scaffold_backup)
+                shutil.move(str(clone_root / "code"), str(scaffold_backup))
+                clone_root.rmdir()
+
+        print(f"Cloning DataLad dataset from {self.qsiprep_datalad_source} to {clone_root}")
+        clone_root.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["datalad", "clone", self.qsiprep_datalad_source, str(clone_root)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip()
+            print(f"ERROR: datalad clone of qsiprep source failed: {err}", file=sys.stderr)
+            if scaffold_backup is not None:
+                clone_root.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(scaffold_backup), str(clone_root / "code"))
+            self.qsiprep_datalad = False
+            return None
+
+        if scaffold_backup is not None:
+            dest_code_dir = clone_root / "code"
+            src_dsistudio = scaffold_backup / "dsistudio"
+            if src_dsistudio.exists():
+                dest_dsistudio = dest_code_dir / "dsistudio"
+                if dest_dsistudio.exists():
+                    # The clone itself already tracks a code/dsistudio/ (e.g.
+                    # another machine's run was pushed here before) - merge
+                    # ours in rather than clobbering it.
+                    shutil.copytree(str(src_dsistudio), str(dest_dsistudio), dirs_exist_ok=True)
+                    shutil.rmtree(str(src_dsistudio))
+                else:
+                    dest_code_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(src_dsistudio), str(dest_dsistudio))
+            shutil.rmtree(scaffold_backup, ignore_errors=True)
+
+        self._checkout_datalad_branch(clone_root, self.qsiprep_datalad_branch)
+        return clone_root
+
+    def _setup_qsiprep_datalad(self):
+        """Finish preparing the read-only qsiprep source for DataLad access:
+        the clone and the top-level branch checkout already happened in
+        _ensure_qsiprep_clone() (before any directories were created under
+        project_root); this installs subdataset registrations (no content)
+        so file trees become visible for globbing in find_qsiprep_files(),
+        and fixes up any stale submodule pins recursively.
+
+        Some labs keep the actual processed data on a dedicated branch
+        (self.qsiprep_datalad_branch, e.g. 'derivatives') rather than the
+        default one - a subdataset's pinned commit can be stale (pointing at
+        an empty initial commit) even once its own branch has real data, so
+        that branch has to be checked out independently in every nested
+        subdataset too, not just at the top level.
+
+        This source is never written back to - only clone/get/branch
+        checkouts are ever run against it, never save/push/unlock/drop.
+        """
+        clone_root = self._qsiprep_clone_root
+        if clone_root is None:
+            return  # cloning failed or was disabled - already logged in _ensure_qsiprep_clone()
+
+        self.logger.info(f"Installing subdataset registrations (no content) under {clone_root}")
+        result = subprocess.run(
+            ["datalad", "get", "-n", "-r", "-J", str(self.threads), "-d", str(clone_root), str(clone_root)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip()[-1000:]
+            self.logger.warning(f"datalad get -n -r on {clone_root} had issues: {err}")
+
+        if clone_root != self.qsiprep_dir:
+            # qsiprep_dir may be several submodule-levels deep (e.g.
+            # derivatives/qsiprep under a study superdataset) - make sure
+            # it specifically is installed even if the recursive pass above
+            # somehow missed it. Cheap and idempotent if already installed.
+            subprocess.run(
+                ["datalad", "get", "-n", "-d", str(clone_root), str(self.qsiprep_dir)],
+                capture_output=True, text=True
+            )
+
+        # Heal any already-installed subdataset (e.g. from an earlier,
+        # broken attempt) whose 'origin' is stuck with a stale URL and/or a
+        # permanently-set annex-ignore flag, *before* checking out branches
+        # in them - otherwise content fetches for a previously-poisoned
+        # subdataset would keep failing even though the top-level clone and
+        # git-annex itself are now fine.
+        self._resync_installed_subdataset_remotes(clone_root)
+        self._checkout_datalad_branch_in_subdatasets(clone_root, self.qsiprep_datalad_branch)
+
+    def _ensure_datalad_content(self, paths: List[Path]):
+        """Fetch content for the given qsiprep-source paths via 'datalad get'
+        if it isn't present locally yet (unfetched git-annex files show up
+        as broken symlinks, which glob() still lists by name). Read-only:
+        only ever 'get's from this source, never saves/pushes/drops it.
+        No-op if --qsiprep_datalad wasn't enabled.
+        """
+        if not self.qsiprep_datalad:
+            return
+        missing = [p for p in paths if not p.exists()]
+        if not missing:
+            return
+        if self.dry_run:
+            self.logger.info(f"[dry-run] datalad get {' '.join(str(p) for p in missing)}")
+            return
+        result = subprocess.run(
+            ["datalad", "get", "-d", str(self.qsiprep_dir)] + [str(p) for p in missing],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip()[-500:]
+            self.logger.warning(f"datalad get failed for {[p.name for p in missing]}: {err}")
+
+    def _ensure_subject_dir(self, subject_id: str) -> Path:
+        """Return this subject's own subfolder under output_dir - always
+        nested (<output_dir>/<subject_id>/...), whether or not --datalad is
+        on. With --datalad, it's created as a proper nested DataLad dataset
+        of the project superdataset (and the container gets registered in
+        it); without --datalad, it's just a plain directory. Subject-nested
+        output is the standard layout either way - it mirrors how
+        qsiprep/DataLad themselves organize per-subject data, rather than
+        being a DataLad-only special case.
+        """
+        subject_dir = self.output_dir / subject_id
+        if self.use_datalad:
+            if not (subject_dir / ".datalad").exists():
+                self.logger.info(f"Creating nested DataLad dataset for {subject_id}")
+                result = subprocess.run(
+                    ["datalad", "create", "-d", str(self.project_root), str(subject_dir)],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    self.logger.error(f"datalad create for {subject_id} failed: {result.stderr.strip()}")
+            self._register_datalad_container(subject_dir)
+        else:
+            subject_dir.mkdir(parents=True, exist_ok=True)
         return subject_dir
 
     def _datalad_run(self, dataset_dir: Path, dsi_args: List[str], output_glob: str, message: str) -> bool:
@@ -700,12 +1103,26 @@ class DSIStudioPipeline:
                 f"{len(all_dwi)}/{before} files matched"
             )
 
+        # In pilot mode, narrow down to one randomly chosen subject's files
+        # *before* fetching any DataLad content below - filenames alone are
+        # enough to pick a subject (glob lists them regardless of whether
+        # their content has been fetched yet), so doing this first avoids
+        # 'datalad get' being attempted for every other subject just to
+        # determine which single one to actually keep.
+        if self.pilot:
+            subjects = {dwi.name.split('_')[0] for dwi in all_dwi}
+            if subjects:
+                selected_sub = random.choice(list(subjects))
+                all_dwi = [f for f in all_dwi if f.name.startswith(selected_sub + "_")]
+                self.logger.info(f"PILOT MODE: Randomly selected subject {selected_sub} ({len(all_dwi)} files)")
+
         valid_dwi = []
         current_time = datetime.now().timestamp()
-        
+
         for dwi in all_dwi:
             bval = dwi.with_suffix('').with_suffix('').with_suffix('.bval')
             bvec = dwi.with_suffix('').with_suffix('').with_suffix('.bvec')
+            self._ensure_datalad_content([dwi, bval, bvec])
             if not (bval.exists() and bvec.exists()):
                 self.logger.warning(f"Skipping {dwi.name}: Missing .bval or .bvec")
                 self.stats["skipped_missing"] += 1
@@ -716,8 +1133,15 @@ class DSIStudioPipeline:
                 self.stats["skipped_missing"] += 1
                 continue
             
-            # Check if files are recent (possibly still being written by qsiprep)
-            if self.min_file_age > 0:
+            # Check if files are recent (possibly still being written by qsiprep).
+            # Skipped entirely under --qsiprep_datalad: this data was already
+            # committed to the source dataset, so it can't still be "being
+            # written" - and current_time was captured once before this loop,
+            # while _ensure_datalad_content() above can take real wall-clock
+            # time to fetch a file, so its mtime (set at fetch completion) can
+            # end up *after* current_time, giving a bogus negative age that's
+            # always < min_file_age and skips every freshly-fetched file.
+            if self.min_file_age > 0 and not self.qsiprep_datalad:
                 dwi_age = current_time - dwi.stat().st_mtime
                 bval_age = current_time - bval.stat().st_mtime
                 bvec_age = current_time - bvec.stat().st_mtime
@@ -736,18 +1160,6 @@ class DSIStudioPipeline:
             return []
 
         self.stats["found"] = len(valid_dwi)
-        if self.pilot:
-            subjects = set()
-            for dwi in valid_dwi:
-                sub_id = dwi.name.split('_')[0]
-                subjects.add(sub_id)
-            
-            if subjects:
-                selected_sub = random.choice(list(subjects))
-                selected_files = [f for f in valid_dwi if f.name.startswith(selected_sub + "_")]
-                self.logger.info(f"PILOT MODE: Randomly selected subject {selected_sub} ({len(selected_files)} files)")
-                return selected_files
-            
         self.logger.info(f"Found {len(valid_dwi)} valid DWI files")
         return valid_dwi
 
@@ -774,10 +1186,7 @@ class DSIStudioPipeline:
 
         all_fibs: List[Path] = []
         for suffix in expected_suffixes:
-            if self.use_datalad:
-                all_fibs.extend(self.output_dir.glob(f"sub-*/fib/*{suffix}"))
-            else:
-                all_fibs.extend(self.fib_dir.glob(f"*{suffix}"))
+            all_fibs.extend(self.output_dir.glob(f"sub-*/fib/*{suffix}"))
 
         if self.session_filter:
             before = len(all_fibs)
@@ -818,13 +1227,9 @@ class DSIStudioPipeline:
             self.logger.warning(f"Missing bval/bvec for {dwi_file.name}, skipping.")
             return None
 
-        if self.use_datalad:
-            subject_dir = self._ensure_subject_dataset(subject_id)
-            src_subdir = subject_dir / "src"
-            src_subdir.mkdir(parents=True, exist_ok=True)
-        else:
-            subject_dir = None
-            src_subdir = self.src_dir
+        subject_dir = self._ensure_subject_dir(subject_id)
+        src_subdir = subject_dir / "src"
+        src_subdir.mkdir(parents=True, exist_ok=True)
         output_src = src_subdir / f"{base_id}.src.gz"
 
         dsi_args = [
@@ -851,7 +1256,9 @@ class DSIStudioPipeline:
             anat_dirs.append(dwi_file.parents[2] / "anat")
         t1w_files = []
         for anat_dir in anat_dirs:
-            t1w_files = [f for f in anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz") if f.exists()]
+            candidates = list(anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz"))
+            self._ensure_datalad_content(candidates)
+            t1w_files = [f for f in candidates if f.exists()]
             if t1w_files:
                 break
         if t1w_files:
@@ -860,11 +1267,14 @@ class DSIStudioPipeline:
         elif any(anat_dir.glob(f"{subject_id}*_desc-preproc_T1w.nii.gz") for anat_dir in anat_dirs):
             self.logger.warning(
                 f"T1w for {base_id} matched but content isn't fetched (broken DataLad/git-annex "
-                f"symlink) - run 'datalad get' on it first. Treating as missing."
+                f"symlink) - run 'datalad get' on it first, or pass --qsiprep_datalad to fetch "
+                f"it automatically. Treating as missing."
             )
 
         # Try to find mask
-        mask_files = [f for f in dwi_file.parent.glob(f"{base_id}*_desc-brain_mask.nii.gz") if f.exists()]
+        mask_candidates = list(dwi_file.parent.glob(f"{base_id}*_desc-brain_mask.nii.gz"))
+        self._ensure_datalad_content(mask_candidates)
+        mask_files = [f for f in mask_candidates if f.exists()]
         if mask_files:
             dsi_args.append(f"--mask={mask_files[0]}")
             self.logger.info(f"Found mask for {base_id}: {mask_files[0].name}")
@@ -922,13 +1332,9 @@ class DSIStudioPipeline:
         method_key = str(self.method) if self.method else '4'
         expected_suffixes = method_suffixes.get(method_key, ['*'])
 
-        if self.use_datalad:
-            subject_dir = self._ensure_subject_dataset(subject_id)
-            fib_subdir = subject_dir / "fib"
-            fib_subdir.mkdir(parents=True, exist_ok=True)
-        else:
-            subject_dir = None
-            fib_subdir = self.fib_dir
+        subject_dir = self._ensure_subject_dir(subject_id)
+        fib_subdir = subject_dir / "fib"
+        fib_subdir.mkdir(parents=True, exist_ok=True)
 
         existing_fib = []
         for suffix in expected_suffixes:
@@ -986,7 +1392,7 @@ class DSIStudioPipeline:
             if generated_fib:
                 moved = []
                 for fib in generated_fib:
-                    dest = self.fib_dir / fib.name
+                    dest = fib_subdir / fib.name
                     if not self.dry_run:
                         fib.rename(dest)
                         # Validate the FIB file
@@ -1014,11 +1420,8 @@ class DSIStudioPipeline:
             return None
 
         output_name = f"{sub_f}_{ses_f}_minus_{ses_b}.fib.gz"
-        if self.use_datalad:
-            diff_subdir = self._ensure_subject_dataset(sub_f) / "diff"
-            diff_subdir.mkdir(parents=True, exist_ok=True)
-        else:
-            diff_subdir = self.diff_dir
+        diff_subdir = self._ensure_subject_dir(sub_f) / "diff"
+        diff_subdir.mkdir(parents=True, exist_ok=True)
         output_path = diff_subdir / output_name
 
         if output_path.exists() and self.skip_existing and not self._should_force('diffs'):
@@ -1272,7 +1675,9 @@ class DSIStudioPipeline:
 </html>
 """
         
-        report_file = self.reports_dir / f"{subject_id}_report.html"
+        reports_subdir = self._ensure_subject_dir(subject_id) / "reports"
+        reports_subdir.mkdir(parents=True, exist_ok=True)
+        report_file = reports_subdir / f"{subject_id}_report.html"
         with open(report_file, 'w') as f:
             f.write(html_content)
         self.logger.info(f"Generated report: {report_file}")
@@ -1362,7 +1767,7 @@ class DSIStudioPipeline:
                         }
                         method_key = str(self.method) if self.method else '4'
                         expected_suffixes = method_suffixes.get(method_key, ['*'])
-                        search_dir = (self.output_dir / dwi_subject_id / "fib") if self.use_datalad else self.fib_dir
+                        search_dir = self.output_dir / dwi_subject_id / "fib"
 
                         for suffix in expected_suffixes:
                             pattern = f"{subject_prefix}{suffix}"
@@ -1473,14 +1878,44 @@ class DSIStudioPipeline:
         
         self._finalize_run(dwi_files, fib_files)
 
+    def _push_derivatives(self):
+        """Push *only* this run's own output subtree to its remote - never
+        touches qsiprep or any other sibling dataset (e.g. mriqc), since the
+        push path is scoped to output_dir specifically. Opt-in via
+        --push_derivatives; this never runs unless the user explicitly asks
+        for it on this invocation, since it writes to a remote that may be
+        shared with other pipelines/users.
+        """
+        if not self.use_datalad:
+            self.logger.warning("--push_derivatives has no effect without --datalad (nothing was committed locally to push).")
+            return
+        # Absolute path, not a path relative to project_root: datalad resolves
+        # a relative push path against the process's cwd (not -d's dataset),
+        # which would silently push the wrong thing (or fail) if the pipeline
+        # was invoked from anywhere other than project_root itself.
+        push_path = str(self.output_dir)
+        if self.dry_run:
+            self.logger.info(f"[dry-run] would push {push_path} (under {self.project_root}) to its remote")
+            return
+        self.logger.info(f"Pushing derivatives ({push_path}) to remote - qsiprep and other sibling datasets are not touched...")
+        result = subprocess.run(
+            ["datalad", "push", "-d", str(self.project_root), "--to", "origin", "-r", push_path],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip()[-2000:]
+            self.logger.error(f"datalad push failed: {err}")
+        else:
+            self.logger.info("Push complete.")
+
     def _finalize_run(self, dwi_files: List[Path], fib_files: List[Path]):
         """Cleanup phase + final summary, shared by the full pipeline and connectivity-only mode."""
         # --- Cleanup Phase ---
         # Delete intermediate .tar.gz and other temporary files to free space
         self.logger.info("🧹 Starting cleanup of intermediate files...")
-        self._cleanup_intermediate_files(self.src_dir)
-        self._cleanup_intermediate_files(self.fib_dir)
-        self._cleanup_intermediate_files(self.diff_dir)
+        # Recursive, so this covers every subject's nested src/fib/diff/
+        # reports subfolders under output_dir in one pass.
+        self._cleanup_intermediate_files(self.output_dir)
         self._cleanup_intermediate_files(self.connectivity_output_dir)
         self.logger.info("✓ Cleanup complete")
 
@@ -1499,6 +1934,9 @@ class DSIStudioPipeline:
                  str(self.output_dir.relative_to(self.project_root))],
                 capture_output=True, text=True
             )
+
+        if self.push_derivatives:
+            self._push_derivatives()
 
         summary_lines = [
             "╔══════════════════════════════════════════════════════════════╗",
@@ -1552,7 +1990,11 @@ class DSIStudioPipeline:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DSI Studio Preprocessing Pipeline")
     parser.add_argument("--qsiprep_dir", required=True, help="Path to qsiprep output directory")
-    parser.add_argument("--output_dir", required=True, help="Path to output directory")
+    parser.add_argument("--qsiprep_datalad", action="store_true", help="Treat --qsiprep_dir as a read-only, (per-subject) nested DataLad dataset: install subject subdataset registrations and 'datalad get' DWI/bval/bvec/T1w/mask content on demand, right before it's needed. Never writes back to this source (no save/push/unlock/drop).")
+    parser.add_argument("--qsiprep_datalad_source", help="If --qsiprep_dir doesn't exist yet (or isn't a DataLad dataset), clone it from this URL first, e.g. 'ssh://user@host/path/to/qsiprep' or a study-level superdataset URL if --qsiprep_dir lives inside --project_root (e.g. <project_root>/derivatives/qsiprep). Implies --qsiprep_datalad.")
+    parser.add_argument("--qsiprep_datalad_branch", default="derivatives", help="Branch to checkout for the qsiprep source, wherever it exists - both at the top level of the clone and independently inside every nested subdataset (some labs keep real processed data on a dedicated branch rather than the default one, and a subdataset's pinned commit can be stale even once that branch has real data). Default: 'derivatives'.")
+    parser.add_argument("--push_derivatives", action="store_true", help="After this run, 'datalad push' ONLY this run's own output subtree (--output_dir) to its remote - never touches qsiprep or any other sibling dataset. Requires --datalad. Opt-in per run; never happens automatically.")
+    parser.add_argument("--output_dir", required=True, help="Path to output directory. Per-subject output is always nested as <output_dir>/<subject_id>/{src,fib,diff,reports}/... (mirrors qsiprep/DataLad's own per-subject layout); --datalad additionally makes each subject folder its own nested DataLad dataset.")
     parser.add_argument("--project_root", help="BIDS-style dataset root (default: inferred from output_dir, e.g. <root>/derivatives/<pipeline> -> <root>). Project-level state (like the Apptainer image pin) lives under <project_root>/code/dsistudio/")
     parser.add_argument("--dsi_studio_cmd", default="/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio", help="Path to dsi_studio executable")
     parser.add_argument("--dsi_studio_path", help="Path to DSI Studio installation folder (containing dsi_studio executable)")
@@ -1570,7 +2012,7 @@ if __name__ == "__main__":
     parser.add_argument("--require_t1w", action="store_true", help="Skip subjects without T1w")
     parser.add_argument("--skip_existing", action="store_true", help="Skip subjects if SRC/FIB already exist")
     parser.add_argument("--force", nargs='?', const='all', help="Force overwrite: 'database' (only db), 'diffs', 'src', 'fib', 'all' (default: all)")
-    parser.add_argument("--min_file_age", type=int, default=300, help="Minimum file age in seconds (default: 300s/5min) to avoid processing files still being written")
+    parser.add_argument("--min_file_age", type=int, default=300, help="Minimum file age in seconds (default: 300s/5min) to avoid processing files still being written. Ignored under --qsiprep_datalad, where files are freshly fetched on demand and their local mtime reflects fetch time, not whether the source data is still being written.")
     parser.add_argument("--session", default="all", help="BIDS session to process, e.g. 'ses-1' or '1' (default: all sessions)")
     parser.add_argument("--acq", default="all", help="BIDS acq tag to filter by, e.g. 'multi' (default: all)")
     parser.add_argument("--space", default="all", help="BIDS space tag to filter by, e.g. 'ACPC' (default: all)")

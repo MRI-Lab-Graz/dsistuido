@@ -161,4 +161,52 @@ uv pip list
    python scripts/pipeline/dsi_studio_pipeline.py --help
    ```
 
+## Optional: DataLad qsiprep Source (`--qsiprep_datalad`)
+
+If your qsiprep data lives in a remote DataLad dataset (e.g. this lab's
+`MRI-Lab_Repository` on `it035016`), two extra prerequisites apply:
+
+### 1. A current git-annex build
+
+This machine's distro-packaged git-annex may be too old to transfer file
+content from a remote running a newer git-annex (the remote gets silently
+marked "annex-ignore" and every `datalad get` fails with
+`not available ... annex-ignore set`). Fix once with:
+
+```bash
+bash installation/install_git_annex.sh
+```
+
+This installs a current standalone git-annex via `datalad-installer` (run
+through `uv tool run`, so nothing is added permanently to this project's
+Python environment) and wires it into `venv/bin/activate` so it's preferred
+automatically once you `source venv/bin/activate`.
+
+### 2. An SSH config alias if your login itself contains an `@`
+
+DataLad's own SSH wrapper (`datalad sshrun`) expects a login target in the
+form `[user@]hostname` - a *single* `@`. Accounts with an email-style login
+(e.g. `karl.koschutnig@uni-graz.at`) produce a "double-@" URL
+(`ssh://karl.koschutnig@uni-graz.at@it035016.uni-graz.at/...`) that DataLad's
+SSH wrapper cannot parse correctly, even though plain `git`/`ssh` handle it
+fine. Symptom: `git annex info origin` shows a mangled `repository location`
+(e.g. `./ssh://...git`) and `get` fails with "Remote origin cannot currently
+be accessed" despite the remote being fully reachable.
+
+Fix: add an SSH config alias with no `@` in it, e.g. in `~/.ssh/config`:
+
+```
+Host mri-it035016
+    HostName it035016.uni-graz.at
+    User karl.koschutnig@uni-graz.at
+```
+
+```bash
+chmod 600 ~/.ssh/config
+ssh mri-it035016 'echo it works'   # verify
+```
+
+Then use `ssh://mri-it035016/...` (instead of the double-`@` form) as the
+`--qsiprep_datalad_source` / "Clone qsiprep from" value.
+
 See the main [README.md](../README.md) for usage instructions.

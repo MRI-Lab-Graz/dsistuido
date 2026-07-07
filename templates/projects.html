@@ -12,7 +12,7 @@
                     <div>
                         <strong>Quick Guide</strong>
                         <div class="text-muted small mt-1">
-                            1) Set your core folders here, 2) save a local/server project profile, 3) move to Pipeline to run backend processing.
+                            This form starts blank so it's ready for a new project. 1) Fill in folders, 2) click <em>Create Project</em>, 3) move to Pipeline to run backend processing. Already have a project? Click <em>Load Current Project</em>, or pick one from "Available Projects" on the right.
                         </div>
                     </div>
                 </div>
@@ -49,6 +49,24 @@
                     </div>
                 </div>
 
+                <div class="mb-3 form-check">
+                    <input class="form-check-input" type="checkbox" id="proj_qsiprep_datalad">
+                    <label class="form-check-label" for="proj_qsiprep_datalad">QSIPrep dir is a DataLad dataset</label>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Clone qsiprep from (optional)</label>
+                    <div class="input-group">
+                        <input class="form-control" id="proj_qsiprep_datalad_source" placeholder="ssh://user@host/path/to/qsiprep, or a study-level superdataset URL if QSIPrep dir is <project root>/derivatives/qsiprep - only needed if it doesn't exist locally yet" />
+                        <button class="btn btn-outline-secondary" type="button" id="openSshPickerBtn"><i class="fas fa-server me-1"></i>Browse remote study</button>
+                    </div>
+                    <div class="path-help mt-1">Read-only source: subject subdatasets get registered and content is fetched with 'datalad get' on demand, per file, right before it's needed. Nothing is ever saved/pushed/unlocked/dropped back to it. "Browse remote study" lists studies on this lab's server over SSH and fills in this field (plus QSIPrep/project root below) for you.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">DataLad branch (optional)</label>
+                    <input class="form-control" id="proj_qsiprep_datalad_branch" placeholder="derivatives" />
+                    <div class="path-help mt-1">Some labs keep the real processed data on a dedicated branch rather than the default one - checked out wherever it exists, both at the top level and independently inside every nested subdataset. Leave as "derivatives" unless your source uses something else.</div>
+                </div>
+
                 <div class="mb-3">
                     <label class="form-label">Pipeline output directory</label>
                     <div class="input-group path-picker-group" data-picker-mode="dir">
@@ -74,38 +92,86 @@
                 </div>
 
                 <div class="mb-3">
+                    <label class="form-label">Connectivity output directory (optional)</label>
+                    <div class="input-group path-picker-group" data-picker-mode="dir">
+                        <input class="form-control" id="proj_conn_output" placeholder="defaults to <output_dir>/connectivity" />
+                        <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
                     <label class="form-label">Load profile from file</label>
                     <div class="input-group path-picker-group" data-picker-mode="file">
                         <input class="form-control" id="proj_load_file_path" placeholder="/path/to/project_profile.json" />
                         <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
                         <button class="btn btn-outline-primary" type="button" id="loadFromFileBtn"><i class="fas fa-file-import me-1"></i>Load</button>
                     </div>
-                    <p class="path-help mt-1 mb-0">Pick a JSON file saved previously (e.g. via "Save Server Preset", which writes to &lt;project root&gt;/code/dsistudio/presets/).</p>
+                    <p class="path-help mt-1 mb-0">Pick a project.json saved previously - e.g. a project's own &lt;project root&gt;/code/dsistudio/project.json copied from elsewhere. Loading one also adds it to "Available Projects" on this machine.</p>
                 </div>
 
+                <div id="createProjectResult" class="small mb-2"></div>
                 <div class="d-flex gap-2 flex-wrap">
-                    <button class="btn btn-success" type="button" id="saveLocalProjectBtn"><i class="fas fa-floppy-disk me-1"></i>Save Local Profile</button>
-                    <button class="btn btn-outline-primary" type="button" id="savePresetProjectBtn"><i class="fas fa-cloud-arrow-up me-1"></i>Save Server Preset</button>
-                    <button class="btn btn-outline-secondary" type="button" id="loadLocalProjectBtn"><i class="fas fa-rotate-left me-1"></i>Load Local Profile</button>
+                    <button class="btn btn-success" type="button" id="createProjectBtn"><i class="fas fa-folder-plus me-1"></i>Create Project</button>
+                    <button class="btn btn-outline-secondary" type="button" id="loadCurrentProjectBtn"><i class="fas fa-rotate-left me-1"></i>Load Current Project</button>
                     <a class="btn btn-primary" href="{{ url_for('pipeline_page') }}"><i class="fas fa-arrow-right me-1"></i>Continue to Pipeline</a>
                 </div>
+                <p class="path-help mt-2 mb-0">"Create Project" makes the project root / output / connectivity-output folders on disk (QSIPrep and rawdata are read-only inputs and are never created), writes &lt;project root&gt;/code/dsistudio/project.json, adds it to "Available Projects" on this machine, and sets it as your current project everywhere in the console.</p>
             </div>
         </div>
     </div>
 
     <div class="col-lg-4">
         <div class="card feature-card">
-            <div class="card-header">
-                <i class="fas fa-bookmark me-2 text-info"></i>Project Presets
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-folder-tree me-2 text-info"></i>Available Projects</span>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="refreshProjectsListBtn"><i class="fas fa-arrows-rotate"></i></button>
             </div>
             <div class="card-body">
-                <label class="form-label">Saved server presets</label>
-                <div class="input-group mb-2">
-                    <select class="form-select" id="projectPresetSelect"></select>
-                    <button class="btn btn-outline-secondary" type="button" id="refreshProjectPresetsBtn"><i class="fas fa-arrows-rotate"></i></button>
+                <div id="projectsListBody" class="d-flex flex-column gap-2">
+                    <p class="text-muted small mb-0">Loading...</p>
                 </div>
-                <button class="btn btn-outline-primary w-100" type="button" id="loadProjectPresetBtn">Load selected preset</button>
-                <p class="path-help mt-2 mb-0">Presets save into &lt;project root&gt;/code/dsistudio/presets/ (falls back to scripts/web_settings if no project root is set) and can be reused across pages.</p>
+                <p class="path-help mt-2 mb-0">Every project you create or load here is listed on this machine, regardless of where its folders live. Each project's own data stays in &lt;project root&gt;/code/dsistudio/project.json - this list is just a pointer to it.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="sshPickerModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-server me-2 text-primary"></i>Browse Remote Study (SSH)</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-2 mb-2">
+                    <div class="col-md-5">
+                        <label class="form-label small mb-1">SSH user (optional)</label>
+                        <input class="form-control form-control-sm" id="sshPickerUser" placeholder="leave blank if using an SSH config alias" />
+                    </div>
+                    <div class="col-md-7">
+                        <label class="form-label small mb-1">Host (or SSH config alias)</label>
+                        <input class="form-control form-control-sm" id="sshPickerHost" />
+                    </div>
+                </div>
+                <div class="input-group input-group-sm mb-2">
+                    <button class="btn btn-outline-secondary" type="button" id="sshPickerUpBtn" title="Parent"><i class="fas fa-arrow-up"></i></button>
+                    <input class="form-control" id="sshPickerPathInput" placeholder="/datalad/mri/MRI-Lab_Repository" />
+                    <button class="btn btn-outline-secondary" type="button" id="sshPickerGoBtn">Go</button>
+                </div>
+                <div class="table-responsive border rounded">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr><th>Name</th><th style="width: 130px;">Action</th></tr>
+                        </thead>
+                        <tbody id="sshPickerEntriesBody"></tbody>
+                    </table>
+                </div>
+                <div id="sshPickerError" class="text-danger small mt-2 d-none"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" type="button" id="sshPickerUseCurrentBtn">Use this folder as the study</button>
             </div>
         </div>
     </div>
@@ -115,43 +181,68 @@
 {% block scripts %}
 <script>
 (function() {
-    const KEY = 'dsi_web_project_profile';
-
     const fields = {
         name: document.getElementById('proj_name'),
         project_root: document.getElementById('proj_root'),
         qsiprep_dir: document.getElementById('proj_qsiprep'),
+        qsiprep_datalad_source: document.getElementById('proj_qsiprep_datalad_source'),
+        qsiprep_datalad_branch: document.getElementById('proj_qsiprep_datalad_branch'),
         output_dir: document.getElementById('proj_output'),
         rawdata_dir: document.getElementById('proj_rawdata'),
         connectivity_config: document.getElementById('proj_conn_config'),
+        connectivity_output_dir: document.getElementById('proj_conn_output'),
+    };
+    const checkboxFields = {
+        qsiprep_datalad: document.getElementById('proj_qsiprep_datalad'),
     };
 
     function collect() {
         const out = {};
         Object.keys(fields).forEach(k => out[k] = (fields[k].value || '').trim());
+        Object.keys(checkboxFields).forEach(k => out[k] = checkboxFields[k].checked);
         return out;
     }
 
     function apply(data) {
         if (!data) return;
         Object.keys(fields).forEach(k => fields[k].value = data[k] || '');
+        Object.keys(checkboxFields).forEach(k => checkboxFields[k].checked = Boolean(data[k]));
     }
 
-    function saveLocal() {
+    async function createProject() {
+        const resultEl = document.getElementById('createProjectResult');
         const profile = collect();
-        localStorage.setItem(KEY, JSON.stringify(profile));
-        window.dsiUi.setCurrentProject(profile);
-        window.dsiUi.notify('Local project profile saved.');
-    }
-
-    function loadLocal() {
-        const raw = localStorage.getItem(KEY);
-        if (!raw) {
-            window.dsiUi.notify('No local profile found.', true);
+        if (!profile.project_root) {
+            window.dsiUi.notify('Project root folder is required.', true);
             return;
         }
-        apply(JSON.parse(raw));
-        window.dsiUi.notify('Local project profile loaded.');
+        try {
+            const res = await window.dsiUi.fetchJson('/api/project/create', profile);
+            window.dsiUi.setCurrentProject(profile);
+            const parts = [`<div class="text-success">Project created. Profile saved to ${res.profile_path}.</div>`];
+            if (res.created && res.created.length) {
+                parts.push(`<div class="text-success">Created: ${res.created.join(', ')}</div>`);
+            }
+            if (res.warnings && res.warnings.length) {
+                parts.push(`<div class="text-warning">Warnings: ${res.warnings.join(' | ')}</div>`);
+            }
+            resultEl.innerHTML = parts.join('');
+            window.dsiUi.notify('Project created.');
+            await loadProjectsList();
+        } catch (error) {
+            resultEl.innerHTML = `<div class="text-danger">${error.message}</div>`;
+            window.dsiUi.notify(error.message, true);
+        }
+    }
+
+    function loadCurrentProject() {
+        const current = window.dsiUi.getCurrentProject();
+        if (!current) {
+            window.dsiUi.notify('No current project set yet.', true);
+            return;
+        }
+        apply(current);
+        window.dsiUi.notify('Current project loaded into the form.');
     }
 
     async function loadFromFile() {
@@ -166,61 +257,206 @@
             apply(settings || {});
             window.dsiUi.setCurrentProject(settings || {});
             window.dsiUi.notify(`Loaded profile from ${path}`);
+            // A profile loaded from an arbitrary path (e.g. copied from
+            // another machine, or a project.json this machine never created
+            // itself) is registered here so it shows up in "Available
+            // Projects" from now on instead of only being reachable by
+            // re-browsing to this exact file.
+            if (settings && settings.project_root) {
+                await window.dsiUi.fetchJson('/api/projects/register', {
+                    name: settings.name || '',
+                    project_root: settings.project_root,
+                    profile_path: path,
+                });
+                await loadProjectsList();
+            }
         } catch (error) {
             window.dsiUi.notify(error.message, true);
         }
     }
 
-    async function savePreset() {
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    async function loadProjectsList() {
+        const body = document.getElementById('projectsListBody');
+        let entries;
         try {
-            await window.dsiUi.savePreset('project', collect());
-            window.dsiUi.notify('Project preset saved on server.');
-            await loadPresetList();
+            entries = await (await fetch('/api/projects/list')).json();
         } catch (error) {
-            window.dsiUi.notify(error.message, true);
-        }
-    }
-
-    async function loadPresetList() {
-        const select = document.getElementById('projectPresetSelect');
-        const presets = await window.dsiUi.listPresets('project');
-        if (!presets.length) {
-            select.innerHTML = '<option value="">No presets</option>';
+            body.innerHTML = `<p class="text-danger small mb-0">Could not load project list: ${escapeHtml(error.message)}</p>`;
             return;
         }
-        select.innerHTML = '';
-        presets.forEach((p) => {
-            const opt = document.createElement('option');
-            opt.value = p.name;
-            opt.textContent = p.name;
-            select.appendChild(opt);
+        if (!Array.isArray(entries) || entries.length === 0) {
+            body.innerHTML = '<p class="text-muted small mb-0">No projects on this machine yet - create one on the left.</p>';
+            return;
+        }
+        body.innerHTML = entries.map((entry) => `
+            <div class="d-flex justify-content-between align-items-start border rounded p-2">
+                <div class="me-2" style="min-width: 0;">
+                    <div class="fw-bold text-truncate">${escapeHtml(entry.name || entry.project_root)}</div>
+                    <div class="text-muted small text-truncate">${escapeHtml(entry.project_root)}</div>
+                </div>
+                <div class="d-flex gap-1 flex-shrink-0">
+                    <button class="btn btn-sm btn-outline-primary project-load-btn" type="button" data-root="${escapeHtml(entry.project_root)}" data-profile="${escapeHtml(entry.profile_path)}">Load</button>
+                    <button class="btn btn-sm btn-outline-danger project-forget-btn" type="button" data-root="${escapeHtml(entry.project_root)}">Forget</button>
+                </div>
+            </div>
+        `).join('');
+
+        body.querySelectorAll('.project-load-btn').forEach((btn) => {
+            btn.addEventListener('click', () => loadProjectEntry(btn.dataset.profile));
+        });
+        body.querySelectorAll('.project-forget-btn').forEach((btn) => {
+            btn.addEventListener('click', () => forgetProjectEntry(btn.dataset.root));
         });
     }
 
-    async function loadSelectedPreset() {
-        const select = document.getElementById('projectPresetSelect');
-        const filename = select.value;
-        if (!filename) return;
+    async function loadProjectEntry(profilePath) {
         try {
-            const data = await window.dsiUi.readPreset(filename);
-            apply(data.settings || {});
-            window.dsiUi.setCurrentProject(data.settings || {});
-            window.dsiUi.notify(`Loaded preset ${filename}`);
+            const data = await window.dsiUi.readJsonFile(profilePath);
+            const settings = data.content || {};
+            apply(settings);
+            window.dsiUi.setCurrentProject(settings);
+            window.dsiUi.notify(`Loaded project from ${profilePath}`);
         } catch (error) {
             window.dsiUi.notify(error.message, true);
         }
     }
 
-    document.getElementById('saveLocalProjectBtn').addEventListener('click', saveLocal);
-    document.getElementById('loadLocalProjectBtn').addEventListener('click', loadLocal);
-    document.getElementById('loadFromFileBtn').addEventListener('click', loadFromFile);
-    document.getElementById('savePresetProjectBtn').addEventListener('click', savePreset);
-    document.getElementById('refreshProjectPresetsBtn').addEventListener('click', loadPresetList);
-    document.getElementById('loadProjectPresetBtn').addEventListener('click', loadSelectedPreset);
+    async function forgetProjectEntry(projectRoot) {
+        if (!confirm('Remove this project from the list on this machine? Its own files are never touched.')) return;
+        try {
+            await window.dsiUi.fetchJson('/api/projects/forget', { project_root: projectRoot });
+            window.dsiUi.notify('Removed from this machine\'s project list.');
+            await loadProjectsList();
+        } catch (error) {
+            window.dsiUi.notify(error.message, true);
+        }
+    }
 
-    const current = window.dsiUi.getCurrentProject();
-    if (current) apply(current);
-    loadPresetList();
+    document.getElementById('createProjectBtn').addEventListener('click', createProject);
+    document.getElementById('loadCurrentProjectBtn').addEventListener('click', loadCurrentProject);
+    document.getElementById('loadFromFileBtn').addEventListener('click', loadFromFile);
+    document.getElementById('refreshProjectsListBtn').addEventListener('click', loadProjectsList);
+
+    // Intentionally left blank on load, even if a current project is already
+    // set (e.g. from a prior session) - this page is for starting a *new*
+    // project. Use "Load Current Project" or pick one from the list to edit
+    // an existing one.
+    loadProjectsList();
+})();
+
+(function() {
+    const modalEl = document.getElementById('sshPickerModal');
+    const modal = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
+    const userInput = document.getElementById('sshPickerUser');
+    const hostInput = document.getElementById('sshPickerHost');
+    const pathInput = document.getElementById('sshPickerPathInput');
+    const entriesBody = document.getElementById('sshPickerEntriesBody');
+    const errorEl = document.getElementById('sshPickerError');
+
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function clearError() {
+        errorEl.classList.add('d-none');
+        errorEl.textContent = '';
+    }
+
+    function showError(msg) {
+        errorEl.classList.remove('d-none');
+        errorEl.textContent = msg;
+    }
+
+    async function loadEntries(path) {
+        clearError();
+        entriesBody.innerHTML = '<tr><td colspan="2" class="text-muted"><i class="fas fa-spinner fa-spin me-2"></i>Loading...</td></tr>';
+        try {
+            const data = await window.dsiUi.fetchJson('/api/remote/ssh_list', {
+                user: userInput.value.trim(),
+                host: hostInput.value.trim(),
+                path: path,
+            });
+            pathInput.value = data.path;
+            const dirs = (data.entries || []).filter(e => e.is_dir);
+            if (!dirs.length) {
+                entriesBody.innerHTML = '<tr><td colspan="2" class="text-muted">No subdirectories found.</td></tr>';
+                return;
+            }
+            entriesBody.innerHTML = dirs.map(entry => {
+                const childPath = (data.path.replace(/\/$/, '')) + '/' + entry.name;
+                return `<tr>
+                    <td><a href="#" class="ssh-picker-open-link" data-path="${escapeHtml(childPath)}"><i class="fas fa-folder text-warning me-2"></i>${escapeHtml(entry.name)}</a></td>
+                    <td><button type="button" class="btn btn-sm btn-outline-success ssh-picker-choose-btn" data-path="${escapeHtml(childPath)}">Select</button></td>
+                </tr>`;
+            }).join('');
+            entriesBody.querySelectorAll('.ssh-picker-open-link').forEach(link => {
+                link.addEventListener('click', (e) => { e.preventDefault(); loadEntries(link.dataset.path); });
+            });
+            entriesBody.querySelectorAll('.ssh-picker-choose-btn').forEach(btn => {
+                btn.addEventListener('click', () => useFolder(btn.dataset.path));
+            });
+        } catch (error) {
+            entriesBody.innerHTML = '';
+            showError(error.message);
+        }
+    }
+
+    function useFolder(remotePath) {
+        const user = userInput.value.trim();
+        const host = hostInput.value.trim();
+        const studyName = remotePath.split('/').filter(Boolean).pop() || 'study';
+        // user is optional: an SSH config alias (Host block) can supply it
+        // instead - required anyway for DataLad's own SSH wrapper to work
+        // with email-style ("user@domain.tld") logins. See SETUP.md.
+        const authority = user ? `${user}@${host}` : host;
+
+        document.getElementById('proj_qsiprep_datalad_source').value = `ssh://${authority}${remotePath}`;
+        document.getElementById('proj_qsiprep_datalad').checked = true;
+
+        const rootInput = document.getElementById('proj_root');
+        if (!rootInput.value.trim()) {
+            rootInput.value = `/data/local/${studyName}`;
+        }
+        document.getElementById('proj_qsiprep').value = `${rootInput.value.trim()}/derivatives/qsiprep`;
+
+        window.dsiUi.notify(`Set qsiprep source to ${studyName}. Double-check the project root / QSIPrep directory below before creating the project.`);
+        if (modal) modal.hide();
+    }
+
+    async function openPicker() {
+        clearError();
+        try {
+            const defaults = await window.dsiUi.fetchJson('/api/remote/ssh_default', undefined, 'GET');
+            if (!userInput.value.trim()) userInput.value = defaults.user || '';
+            if (!hostInput.value.trim()) hostInput.value = defaults.host || '';
+            if (!pathInput.value.trim()) pathInput.value = defaults.path || '/';
+        } catch (error) {
+            // Fall back to whatever's already in the fields (or blank) if the
+            // defaults endpoint is unreachable - user can still type manually.
+        }
+        if (modal) modal.show();
+        loadEntries(pathInput.value.trim() || '/');
+    }
+
+    document.getElementById('openSshPickerBtn').addEventListener('click', openPicker);
+    document.getElementById('sshPickerGoBtn').addEventListener('click', () => loadEntries(pathInput.value.trim()));
+    document.getElementById('sshPickerUpBtn').addEventListener('click', () => {
+        const parent = pathInput.value.trim().replace(/\/[^/]+\/?$/, '') || '/';
+        loadEntries(parent);
+    });
+    document.getElementById('sshPickerUseCurrentBtn').addEventListener('click', () => useFolder(pathInput.value.trim()));
 })();
 </script>
 {% endblock %}

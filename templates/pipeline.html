@@ -10,7 +10,7 @@
             <div>
                 <strong>Quick Guide</strong>
                 <div class="text-muted small mt-1">
-                    Select QSIPrep + output paths, tune method/threads, then click <em>Run Pipeline</em>. The backend handles SRC/FIB/database generation and optional connectivity extraction.
+                    Folders (QSIPrep, output, rawdata, connectivity config) come from your current project - set them on the <a href="{{ url_for('projects_page') }}">New Project</a> page. Here, tune method/threads/filters, then click <em>Run Pipeline</em>. The backend handles SRC/FIB/database generation and optional connectivity extraction.
                 </div>
             </div>
         </div>
@@ -22,23 +22,18 @@
         <i class="fas fa-diagram-project me-2 text-success"></i>Pipeline Runner
     </div>
     <div class="card-body">
+        <div id="pipelineNoProjectWarning" class="alert alert-warning d-none">
+            No project folders set yet. Go to <a href="{{ url_for('projects_page') }}">New Project</a> to configure QSIPrep/output/rawdata/connectivity folders before running the pipeline.
+        </div>
         <div class="row g-3">
             <div class="col-md-6">
                 <label class="form-label">QSIPrep directory</label>
-                <div class="input-group path-picker-group" data-picker-mode="dir">
-                    <input class="form-control" id="p_qsiprep" />
-                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
-                </div>
+                <input class="form-control" id="p_qsiprep_display" readonly>
             </div>
             <div class="col-md-6">
                 <label class="form-label">Output directory</label>
-                <div class="input-group path-picker-group" data-picker-mode="dir">
-                    <input class="form-control" id="p_output" />
-                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
-                </div>
+                <input class="form-control" id="p_output_display" readonly>
             </div>
-
-            <input type="hidden" id="p_project_root">
 
             <div class="col-md-3 form-check pt-4">
                 <input class="form-check-input" type="checkbox" id="p_apptainer" checked>
@@ -60,6 +55,12 @@
                 <input class="form-check-input" type="checkbox" id="p_datalad" checked>
                 <label class="form-check-label" for="p_datalad">Use DataLad (transparent, reproducible runs)</label>
                 <div class="form-text">Project becomes a DataLad superdataset, each subject a nested dataset; every SRC/FIB/database call is a single replayable, provenance-recording commit. Only bootstraps brand-new projects - existing non-DataLad projects keep running as before.</div>
+            </div>
+
+            <div class="col-md-12 form-check">
+                <input class="form-check-input" type="checkbox" id="p_push_derivatives">
+                <label class="form-check-label" for="p_push_derivatives">Push this run's output to its remote when finished</label>
+                <div class="form-text">Opt-in, one-time action for this run only - never happens automatically. Pushes only the output subtree (e.g. derivatives/dsistudio); QSIPrep and any other sibling dataset are never touched. Requires "Use DataLad" above.</div>
             </div>
 
             <div class="col-md-4">
@@ -106,10 +107,7 @@
 
             <div class="col-md-6">
                 <label class="form-label">BIDS folder (rawdata)</label>
-                <div class="input-group path-picker-group" data-picker-mode="dir">
-                    <input class="form-control" id="p_rawdata" />
-                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
-                </div>
+                <input class="form-control" id="p_rawdata_display" readonly>
             </div>
             <div class="col-md-6">
                 <label class="form-label">Database name</label>
@@ -122,20 +120,16 @@
             </div>
             <div class="col-md-8">
                 <label class="form-label">Connectivity config JSON</label>
-                <div class="input-group path-picker-group" data-picker-mode="file">
-                    <input class="form-control" id="p_connectivity_config" />
-                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                <div class="input-group">
+                    <input class="form-control" id="p_connectivity_config_display" readonly>
                     <button class="btn btn-outline-primary" type="button" id="editConnectivitySettingsBtn"><i class="fas fa-sliders me-1"></i>Edit Settings</button>
                 </div>
-                <div class="form-text">Build the config visually instead of hand-editing JSON - opens a dedicated settings page and saves into the project folder.</div>
+                <div class="form-text">Set on the New Project page. "Edit Settings" opens a dedicated page to build the config visually instead of hand-editing JSON.</div>
             </div>
 
             <div class="col-md-6">
                 <label class="form-label">Connectivity output directory</label>
-                <div class="input-group path-picker-group" data-picker-mode="dir">
-                    <input class="form-control" id="p_connectivity_output" />
-                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
-                </div>
+                <input class="form-control" id="p_connectivity_output_display" readonly>
             </div>
             <div class="col-md-6">
                 <label class="form-label">Connectivity threads</label>
@@ -242,13 +236,42 @@
     function value(id) { return (document.getElementById(id).value || '').trim(); }
     function checked(id) { return document.getElementById(id).checked; }
 
+    // Folders (qsiprep_dir, output_dir, project_root, rawdata_dir,
+    // connectivity_config, connectivity_output_dir, qsiprep_datalad*) are
+    // owned by the current project (set on the New Project page) - this page
+    // only reads them, never edits them, so there's a single source of truth.
+    function projectFolderFields() {
+        const p = window.dsiUi.getCurrentProject() || {};
+        return {
+            qsiprep_dir: p.qsiprep_dir || '',
+            output_dir: p.output_dir || '',
+            project_root: p.project_root || '',
+            rawdata_dir: p.rawdata_dir || '',
+            connectivity_config: p.connectivity_config || '',
+            connectivity_output_dir: p.connectivity_output_dir || '',
+            qsiprep_datalad: Boolean(p.qsiprep_datalad),
+            qsiprep_datalad_source: p.qsiprep_datalad_source || '',
+            qsiprep_datalad_branch: p.qsiprep_datalad_branch || '',
+        };
+    }
+
+    function updateProjectDisplays() {
+        const p = projectFolderFields();
+        document.getElementById('p_qsiprep_display').value = p.qsiprep_dir;
+        document.getElementById('p_output_display').value = p.output_dir;
+        document.getElementById('p_rawdata_display').value = p.rawdata_dir;
+        document.getElementById('p_connectivity_config_display').value = p.connectivity_config;
+        document.getElementById('p_connectivity_output_display').value = p.connectivity_output_dir;
+        document.getElementById('pipelineNoProjectWarning').classList.toggle('d-none', Boolean(p.qsiprep_dir || p.output_dir));
+        refreshBidsEntities();
+    }
+
     function buildPayload() {
         return {
-            qsiprep_dir: value('p_qsiprep'),
-            output_dir: value('p_output'),
-            project_root: value('p_project_root'),
+            ...projectFolderFields(),
             apptainer: checked('p_apptainer'),
             datalad: checked('p_datalad'),
+            push_derivatives: checked('p_push_derivatives'),
             apptainer_image: value('p_apptainer_image'),
             apptainer_bind: value('p_apptainer_bind'),
             method: value('p_method'),
@@ -258,11 +281,8 @@
             session: value('p_session') || 'all',
             acq: value('p_acq') || 'all',
             space: value('p_space') || 'all',
-            rawdata_dir: value('p_rawdata'),
             db_name: value('p_db_name'),
             min_file_age: value('p_min_file_age'),
-            connectivity_config: value('p_connectivity_config'),
-            connectivity_output_dir: value('p_connectivity_output'),
             connectivity_threads: value('p_connectivity_threads'),
             require_mask: checked('p_require_mask'),
             require_t1w: checked('p_require_t1w'),
@@ -278,20 +298,14 @@
     function applyPayload(data) {
         if (!data) return;
         const mapping = {
-            p_qsiprep: 'qsiprep_dir',
-            p_output: 'output_dir',
-            p_project_root: 'project_root',
             p_apptainer_image: 'apptainer_image',
             p_apptainer_bind: 'apptainer_bind',
             p_method: 'method',
             p_param0: 'param0',
             p_threads: 'threads',
             p_force: 'force',
-            p_rawdata: 'rawdata_dir',
             p_db_name: 'db_name',
             p_min_file_age: 'min_file_age',
-            p_connectivity_config: 'connectivity_config',
-            p_connectivity_output: 'connectivity_output_dir',
             p_connectivity_threads: 'connectivity_threads',
         };
         Object.keys(mapping).forEach(id => {
@@ -299,7 +313,7 @@
             if (data[key] !== undefined && data[key] !== null) document.getElementById(id).value = data[key];
         });
 
-        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity','connectivity_only','apptainer','datalad'].forEach(k => {
+        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity','connectivity_only','apptainer','datalad','push_derivatives'].forEach(k => {
             const el = document.getElementById('p_' + k);
             if (el && data[k] !== undefined) el.checked = Boolean(data[k]);
         });
@@ -336,7 +350,7 @@
     }
 
     async function refreshBidsEntities() {
-        const qsiprepDir = value('p_qsiprep');
+        const qsiprepDir = projectFolderFields().qsiprep_dir;
         if (!qsiprepDir) return;
         try {
             const data = await window.dsiUi.fetchJson('/api/bids/entities', { qsiprep_dir: qsiprepDir });
@@ -349,19 +363,19 @@
     }
 
     async function runPipeline() {
+        const folders = projectFolderFields();
+        if (!folders.qsiprep_dir || !folders.output_dir) {
+            const msg = 'Set QSIPrep and output directories on the New Project page first.';
+            resultEl.textContent = msg;
+            window.dsiUi.notify(msg, true);
+            document.getElementById('pipelineNoProjectWarning').classList.remove('d-none');
+            document.getElementById('pipelineNoProjectWarning').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
         try {
             const payload = buildPayload();
             const res = await window.dsiUi.fetchJson('/api/run/pipeline', payload);
             resultEl.textContent = `Job started: ${res.job.job_id} - see "Backend Jobs" below for live output.`;
-            const currentProject = {
-                ...window.dsiUi.getCurrentProject(),
-                qsiprep_dir: payload.qsiprep_dir,
-                output_dir: payload.output_dir,
-                rawdata_dir: payload.rawdata_dir,
-                project_root: payload.project_root,
-                connectivity_config: payload.connectivity_config,
-            };
-            window.dsiUi.setCurrentProject(currentProject);
             window.dsiUi.refreshJobs();
         } catch (error) {
             resultEl.textContent = error.message;
@@ -415,9 +429,8 @@
     // looks like the saved values were lost. Auto-load on selection too;
     // the button stays as an explicit re-load/refresh action.
     document.getElementById('pipelinePresetSelect').addEventListener('change', loadSelectedPreset);
-    document.getElementById('p_qsiprep').addEventListener('change', refreshBidsEntities);
     document.getElementById('editConnectivitySettingsBtn').addEventListener('click', () => {
-        const path = value('p_connectivity_config');
+        const path = projectFolderFields().connectivity_config;
         const params = new URLSearchParams();
         if (path) params.set('path', path);
         window.location.href = '/connectivity-settings' + (params.toString() ? ('?' + params.toString()) : '');
@@ -441,23 +454,11 @@
     const urlParams = new URLSearchParams(window.location.search);
     const returnedConnConfig = urlParams.get('connectivity_config');
     if (returnedConnConfig) {
-        window.dsiUi.setCurrentProject({ ...window.dsiUi.getCurrentProject(), connectivity_config: returnedConnConfig });
+        window.dsiUi.setCurrentProject({ ...(window.dsiUi.getCurrentProject() || {}), connectivity_config: returnedConnConfig });
         window.history.replaceState({}, '', window.location.pathname);
     }
 
-    const p = window.dsiUi.getCurrentProject();
-    if (p) {
-        applyPayload({
-            qsiprep_dir: p.qsiprep_dir,
-            output_dir: p.output_dir,
-            rawdata_dir: p.rawdata_dir,
-            project_root: p.project_root,
-            connectivity_config: p.connectivity_config,
-        });
-    } else {
-        refreshBidsEntities();
-    }
-
+    updateProjectDisplays();
     loadPresetList();
 })();
 
