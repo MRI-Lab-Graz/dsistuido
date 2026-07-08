@@ -857,7 +857,12 @@ def api_job_stop(job_id):
         return jsonify({"ok": True})
 
     def _force_kill():
-        time.sleep(5)
+        # dsi_studio_pipeline.py catches SIGTERM and runs a best-effort
+        # 'datalad save' rollup before exiting (see _safety_save() there) so
+        # a stopped job doesn't leave its output untracked - give it real
+        # time to finish that before escalating to SIGKILL, which can't be
+        # caught or cleaned up after.
+        time.sleep(30)
         try:
             if proc.poll() is None:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)

@@ -28,6 +28,7 @@ import shutil
 import csv
 import json
 import shlex
+import signal
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple, Dict
@@ -2011,6 +2012,35 @@ class DSIStudioPipeline:
         else:
             self.logger.info("Push complete.")
 
+    def _rollup_save(self, message: str):
+        """Roll up subject dataset updates into the project superdataset.
+
+        Scoped to output_dir, not the whole project_root - project_root may
+        be a large, pre-existing study root with unrelated content (other
+        pipelines' rawdata/derivatives); an unscoped recursive save would
+        sweep all of that into the dataset too.
+
+        Also called as a safety net from the SIGTERM/SIGINT handler and the
+        crash path in __main__ (see _safety_save() there), so a run that's
+        killed or dies mid-way still gets whatever it produced committed,
+        instead of leaving it untracked until someone notices and saves by
+        hand.
+        """
+        if not self.use_datalad or self.dry_run:
+            return
+        self.logger.info(f"datalad save: {message}")
+        try:
+            result = subprocess.run(
+                ["datalad", "save", "-d", str(self.project_root), "-r", "-m", message,
+                 str(self.output_dir.relative_to(self.project_root))],
+                capture_output=True, text=True, timeout=1800,
+            )
+            if result.returncode != 0:
+                err = (result.stderr or result.stdout).strip()[-2000:]
+                self.logger.warning(f"datalad save reported an issue: {err}")
+        except Exception as exc:
+            self.logger.warning(f"datalad save failed: {exc}")
+
     def _finalize_run(self, dwi_files: List[Path], fib_files: List[Path]):
         """Cleanup phase + final summary, shared by the full pipeline and connectivity-only mode."""
         # --- Cleanup Phase ---
@@ -2026,17 +2056,7 @@ class DSIStudioPipeline:
         self.print_progress_summary(len(dwi_files), len(dwi_files))
 
         # Build summary with error checking
-        if self.use_datalad and not self.dry_run:
-            self.logger.info("Rolling up subject dataset updates into the project superdataset...")
-            # Scoped to output_dir, not the whole project_root - project_root
-            # may be a large, pre-existing study root with unrelated content
-            # (other pipelines' rawdata/derivatives); an unscoped recursive
-            # save would sweep all of that into the dataset too.
-            subprocess.run(
-                ["datalad", "save", "-d", str(self.project_root), "-r", "-m", "Update subject datasets for this pipeline run",
-                 str(self.output_dir.relative_to(self.project_root))],
-                capture_output=True, text=True
-            )
+        self._rollup_save("Update subject datasets for this pipeline run")
 
         if self.push_derivatives:
             self._push_derivatives()
@@ -2128,6 +2148,28 @@ if __name__ == "__main__":
     parser.add_argument("--connectivity_threads", type=int, help="Thread override for connectivity extraction")
     
     args = parser.parse_args()
-    
+
     pipeline = DSIStudioPipeline(args)
-    pipeline.run()
+
+    def _safety_save(signum=None, frame=None):
+        """Best-effort datalad save so a killed or crashed run doesn't leave
+        its output untracked until someone notices and saves by hand - see
+        _rollup_save(). Installed for SIGTERM/SIGINT because the GUI's "stop
+        job" button (and a plain `kill`) send SIGTERM, and neither that nor
+        an unhandled crash would otherwise reach the normal end-of-run save
+        in _finalize_run().
+        """
+        reason = f"signal {signum}" if signum is not None else "pipeline crashed"
+        pipeline.logger.warning(f"Safety-net datalad save triggered ({reason})...")
+        pipeline._rollup_save(f"Safety-net save ({reason})")
+        if signum is not None:
+            sys.exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _safety_save)
+    signal.signal(signal.SIGINT, _safety_save)
+
+    try:
+        pipeline.run()
+    except Exception:
+        _safety_save()
+        raise
