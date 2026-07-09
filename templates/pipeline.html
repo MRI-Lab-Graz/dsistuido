@@ -191,7 +191,7 @@
 
             <div class="col-md-3 form-check pt-4">
                 <input class="form-check-input" type="checkbox" id="qa_apptainer">
-                <label class="form-check-label" for="qa_apptainer">Use Apptainer (GPU container)</label>
+                <label class="form-check-label" for="qa_apptainer">Use unpinned "latest" if no project pin found</label>
             </div>
             <div class="col-md-3 form-check pt-4">
                 <input class="form-check-input" type="checkbox" id="qa_check_btable" checked>
@@ -206,6 +206,14 @@
                 <label class="form-check-label" for="qa_skip_fib">skip_fib</label>
             </div>
 
+            <div class="col-md-6">
+                <label class="form-label">Apptainer image override</label>
+                <div class="input-group path-picker-group" data-picker-mode="file">
+                    <input class="form-control" id="qa_apptainer_image" placeholder="defaults to this project's pinned image" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+                <div class="form-text">One-off check against a different build. Leave blank to use the project's pin from <code>code/dsistudio/dsi_studio_image.json</code> -- doesn't change the pin.</div>
+            </div>
             <div class="col-md-3">
                 <label class="form-label">Min coherence (FIB)</label>
                 <input class="form-control" id="qa_min_coherence" value="0.7" />
@@ -473,6 +481,7 @@
             source_dir: value('qa_source'),
             output_dir: value('qa_output'),
             apptainer: checked('qa_apptainer'),
+            apptainer_image: value('qa_apptainer_image'),
             check_btable: checked('qa_check_btable'),
             skip_src: checked('qa_skip_src'),
             skip_fib: checked('qa_skip_fib'),
@@ -486,6 +495,7 @@
         const mapping = {
             qa_source: 'source_dir',
             qa_output: 'output_dir',
+            qa_apptainer_image: 'apptainer_image',
             qa_min_coherence: 'min_coherence',
             qa_min_r2: 'min_r2',
         };

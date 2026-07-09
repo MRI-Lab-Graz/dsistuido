@@ -20,14 +20,24 @@ Wraps:
     dsi_studio --action=qc --source=<file1,file2,...> --check_btable=1 --output=<sz_qc.tsv>
     dsi_studio --action=qc --source=<file1,file2,...> --output=<fz_qc_*.tsv>
 
+By default this runs against the *same* DSI Studio Apptainer image that
+dsi_studio_pipeline.py pinned for this project (read from
+<project_root>/code/dsistudio/dsi_studio_image.json), so QC always checks
+files with the exact build that produced them -- DSI Studio ships new builds
+almost daily, so an unpinned "latest" would silently drift out of sync.
+Use --apptainer_image for a one-off check against a different build (doesn't
+change the pin), or --dsi_studio_cmd to bypass pinning entirely.
+
 Usage:
     python scripts/qa/run_qc.py /data/local/134_AF19/derivatives/dsistudio
     python scripts/qa/run_qc.py /data/local/122_AF17/derivatives/dsistudio/fib --skip_src
-    python scripts/qa/run_qc.py /path/to/dir --apptainer --output_dir tmp/qc
+    python scripts/qa/run_qc.py /path/to/dir --output_dir tmp/qc
 """
 
 import argparse
 import csv
+import json
+import os
 import subprocess
 import sys
 from collections import deque
@@ -38,11 +48,88 @@ from pathlib import Path
 # prints below would otherwise sit invisible until the whole script exits.
 sys.stdout.reconfigure(line_buffering=True)
 
+# Bare-metal fallback only used when no project pin exists and --apptainer_image
+# wasn't given -- see resolve_dsi_studio_cmd. Prefer the pinned container so QC
+# always matches the exact DSI Studio build that generated the SRC/FIB files;
+# DSI Studio ships new builds almost daily, so an unpinned bare-metal path
+# silently drifts out of sync with what a project was actually processed with.
 DEFAULT_DSI_STUDIO_CMD = "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio"
 APPTAINER_WRAPPER = Path(__file__).resolve().parents[2] / "installation" / "apptainer" / "run_dsi_studio.sh"
+DEFAULT_APPTAINER_IMAGES_DIR = Path("/data/local/software/apptainer_images")
 
 SRC_PATTERNS = ["*.sz", "*.src.gz"]
 FIB_PATTERNS = ["*.fz"]
+
+
+def find_project_pin(source_dir: Path) -> Path | None:
+    """Locate the dsi_studio_image.json that dsi_studio_pipeline.py pinned for
+    this project, so QC checks files with the same DSI Studio build that
+    produced them instead of whatever happens to be the current default.
+
+    Mirrors dsi_studio_pipeline.py's own output_dir -> project_root inference
+    (output_dir/../.. when output_dir's parent is named "derivatives", else
+    output_dir/..), trying source_dir itself and its parent as candidate
+    "output_dir"s since QC is sometimes pointed at output_dir directly and
+    sometimes at a src/ or fib/ subfolder within it (see module docstring).
+    """
+    for candidate_output_dir in (source_dir, source_dir.parent):
+        if candidate_output_dir.parent.name == "derivatives":
+            project_root = candidate_output_dir.parent.parent
+        else:
+            project_root = candidate_output_dir.parent
+        pin_file = project_root / "code" / "dsistudio" / "dsi_studio_image.json"
+        if pin_file.exists():
+            return pin_file
+    return None
+
+
+def resolve_dsi_studio_cmd(args, source_dir: Path) -> str:
+    """Pick which dsi_studio to run, preferring (in order): an explicit
+    --dsi_studio_cmd override, an explicit --apptainer_image override, this
+    project's pinned Apptainer image, --apptainer's unpinned "latest" image,
+    and finally the bare-metal DEFAULT_DSI_STUDIO_CMD. Never writes the pin --
+    only dsi_studio_pipeline.py runs advance a project's pin; QC just follows
+    it, or reports honestly when it can't find one.
+    """
+    if args.dsi_studio_cmd:
+        return args.dsi_studio_cmd
+
+    if args.apptainer_image:
+        image = Path(args.apptainer_image).resolve()
+        if not image.exists():
+            print(f"WARNING: --apptainer_image not found: {image}")
+        print(f"Using explicitly requested DSI Studio image: {image.name}")
+        os.environ["DSI_APPTAINER_IMAGE"] = str(image)
+        return str(APPTAINER_WRAPPER)
+
+    pin_file = find_project_pin(source_dir)
+    if pin_file:
+        try:
+            pinned_image = Path(json.loads(pin_file.read_text())["image"])
+        except Exception as e:
+            print(f"WARNING: could not read {pin_file}: {e}; falling back to unpinned latest image")
+            pinned_image = None
+        if pinned_image and pinned_image.exists():
+            print(f"Using this project's pinned DSI Studio image ({pin_file}): {pinned_image.name}")
+            latest_link = DEFAULT_APPTAINER_IMAGES_DIR / "dsi_studio_latest.sif"
+            if latest_link.exists() and latest_link.resolve() != pinned_image:
+                print(
+                    f"  Note: a newer DSI Studio build is available ({latest_link.resolve().name}) "
+                    f"but this project stays pinned to {pinned_image.name}. Re-run the pipeline with "
+                    f"--apptainer_image to upgrade deliberately, or pass --apptainer_image to this "
+                    f"script for a one-off comparison."
+                )
+            os.environ["DSI_APPTAINER_IMAGE"] = str(pinned_image)
+            return str(APPTAINER_WRAPPER)
+        if pinned_image:
+            print(f"WARNING: pinned image {pinned_image} (from {pin_file}) no longer exists; falling back")
+
+    if args.apptainer:
+        print("No project pin found; using unpinned dsi_studio_latest.sif")
+        return str(APPTAINER_WRAPPER)
+
+    print(f"No project pin found and --apptainer not set; falling back to bare-metal {DEFAULT_DSI_STUDIO_CMD}")
+    return DEFAULT_DSI_STUDIO_CMD
 
 
 def resolve_search_dir(source_dir: Path, subdir_name: str, patterns) -> Path:
@@ -153,8 +240,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("source_dir", help="Directory containing .sz/.src.gz and/or .fz files")
     parser.add_argument("--output_dir", default="tmp/qc", help="Where to write qc tsv reports (default: tmp/qc)")
-    parser.add_argument("--dsi_studio_cmd", default=DEFAULT_DSI_STUDIO_CMD, help="Path to dsi_studio executable")
-    parser.add_argument("--apptainer", action="store_true", help="Run dsi_studio via the Apptainer image instead of the bare-metal install")
+    parser.add_argument("--dsi_studio_cmd", default=None, help="Path to a specific dsi_studio executable, bypassing project pinning entirely")
+    parser.add_argument("--apptainer", action="store_true", help="If no project pin is found, use the unpinned dsi_studio_latest.sif instead of falling back to bare metal")
+    parser.add_argument("--apptainer_image", help="Check against this specific .sif image instead of the project's pin (one-off comparison; does not change the pin)")
     parser.add_argument("--check_btable", type=int, default=1, choices=[0, 1], help="Passed through to the SRC qc pass (default: 1)")
     parser.add_argument("--skip_src", action="store_true", help="Skip the .sz/.src.gz pass")
     parser.add_argument("--skip_fib", action="store_true", help="Skip the .fz pass")
@@ -162,10 +250,11 @@ def main():
     parser.add_argument("--min_r2", type=float, default=0.6, help="Flag FIB files below this R2 (default: 0.6)")
     args = parser.parse_args()
 
-    dsi_studio_cmd = str(APPTAINER_WRAPPER) if args.apptainer else args.dsi_studio_cmd
     source_dir = Path(args.source_dir).resolve()
     if not source_dir.is_dir():
         parser.error(f"Not a directory: {source_dir}")
+
+    dsi_studio_cmd = resolve_dsi_studio_cmd(args, source_dir)
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -178,6 +267,7 @@ def main():
             print(f"Running SRC QC on {len(src_files)} file(s) in {src_dir} -> {out_path}")
             src_patterns = [src_dir / p for p in SRC_PATTERNS]
             run_qc(dsi_studio_cmd, src_patterns, out_path, bool(args.check_btable), len(src_files))
+            dereference_report_filenames(out_path, src_files)
             rows = load_tsv(out_path)
             flagged = summarize_src(rows)
             print(f"  {len(rows)} file(s) checked, {len(flagged)} flagged (bad slices > 0 or outlier)")
@@ -198,8 +288,7 @@ def main():
                 continue
             print(f"Running {label} FIB QC on {len(fib_files)} file(s) -> {out_path}")
             run_qc(dsi_studio_cmd, fib_patterns, out_path, check_btable=False, file_count=len(fib_files))
-            if label == "GQI":
-                dereference_report_filenames(out_path, fib_files)
+            dereference_report_filenames(out_path, fib_files)
             rows = load_tsv(out_path)
             flagged = summarize_fib(rows, args.min_coherence, args.min_r2)
             print(f"  {len(rows)} file(s) checked, {len(flagged)} flagged (Coherence < {args.min_coherence} or R2 < {args.min_r2})")

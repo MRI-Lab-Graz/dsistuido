@@ -471,6 +471,7 @@ def build_qa_command(payload: Dict) -> List[str]:
     optional_args = {
         "output_dir": "--output_dir",
         "dsi_studio_cmd": "--dsi_studio_cmd",
+        "apptainer_image": "--apptainer_image",
         "min_coherence": "--min_coherence",
         "min_r2": "--min_r2",
     }
