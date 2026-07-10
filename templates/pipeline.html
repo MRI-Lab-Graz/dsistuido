@@ -90,6 +90,11 @@
                 </select>
                 <div class="form-text">e.g. "fib" rebuilds FIB files only and leaves existing SRC files untouched.</div>
             </div>
+            <div class="col-md-8">
+                <label class="form-label">Subject(s) (optional)</label>
+                <input class="form-control" id="p_subject" placeholder="all (or e.g. sub-1291076,sub-1291111)" />
+                <div class="form-text">Comma-separated subject IDs to limit this run to - combine with "Force regeneration" above to rerun just the subjects a QC pass flagged, without touching the rest of the cohort.</div>
+            </div>
 
             <div class="col-md-4">
                 <label class="form-label">Session</label>
@@ -234,6 +239,24 @@
         <div class="mt-3 small text-muted" id="qaResult">Ready. Live output appears in "Backend Jobs" below once started.</div>
     </div>
 </div>
+
+<div class="card feature-card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center" style="cursor: pointer;" id="visualQcHeader">
+        <span><i class="fas fa-images me-2 text-info"></i>Visual QC - Slice Viewer</span>
+        <i class="fas fa-chevron-down" id="visualQcChevron"></i>
+    </div>
+    <div class="card-body d-none" id="visualQcBody">
+        <div class="text-muted small mb-3">
+            One mid-axial slice per processed SRC file, for a quick eyeball check (motion, dropout, wrong orientation) alongside the numeric checks above. The pipeline saves one automatically for every SRC file it generates; use "Backfill" below to (re)generate for subjects that were already processed before this existed.
+        </div>
+        <div class="d-flex gap-2 flex-wrap mb-3">
+            <button class="btn btn-outline-primary btn-sm" type="button" id="refreshThumbnailsBtn"><i class="fas fa-rotate me-1"></i>Refresh gallery</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" id="backfillThumbnailsBtn"><i class="fas fa-images me-1"></i>Backfill thumbnails for this project</button>
+        </div>
+        <div class="small text-muted mb-2" id="visualQcStatus">Click "Visual QC" to load.</div>
+        <div id="visualQcGallery" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px;"></div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -286,6 +309,7 @@
             param0: value('p_param0'),
             threads: value('p_threads'),
             force: value('p_force'),
+            subject: value('p_subject') || 'all',
             session: value('p_session') || 'all',
             acq: value('p_acq') || 'all',
             space: value('p_space') || 'all',
@@ -312,6 +336,7 @@
             p_param0: 'param0',
             p_threads: 'threads',
             p_force: 'force',
+            p_subject: 'subject',
             p_db_name: 'db_name',
             p_min_file_age: 'min_file_age',
             p_connectivity_threads: 'connectivity_threads',
@@ -565,6 +590,84 @@
     document.getElementById('qaPresetSelect').addEventListener('change', loadSelectedPreset);
 
     loadPresetList();
+
+    // --- Visual QC: openable/closable slice-thumbnail gallery ---
+    const visualQcHeader = document.getElementById('visualQcHeader');
+    const visualQcBody = document.getElementById('visualQcBody');
+    const visualQcChevron = document.getElementById('visualQcChevron');
+    const visualQcStatus = document.getElementById('visualQcStatus');
+    const visualQcGallery = document.getElementById('visualQcGallery');
+
+    async function refreshThumbnailGallery() {
+        const outputDir = (window.dsiUi.getCurrentProject() || {}).output_dir;
+        if (!outputDir) {
+            visualQcStatus.textContent = 'Set an output directory on the New Project page first.';
+            visualQcGallery.innerHTML = '';
+            return;
+        }
+        visualQcStatus.textContent = 'Loading...';
+        try {
+            const res = await window.dsiUi.fetchJson(
+                `/api/qc/thumbnails?output_dir=${encodeURIComponent(outputDir)}`, undefined, 'GET'
+            );
+            visualQcGallery.innerHTML = '';
+            (res.thumbnails || []).forEach((t) => {
+                const card = document.createElement('div');
+                card.className = 'text-center';
+                const img = document.createElement('img');
+                img.src = t.url;
+                img.alt = t.name;
+                img.title = 'Click to open full size';
+                img.style.width = '100%';
+                img.style.border = '1px solid #ccc';
+                img.style.borderRadius = '4px';
+                img.style.cursor = 'zoom-in';
+                img.addEventListener('click', () => window.open(t.url, '_blank'));
+                const label = document.createElement('div');
+                label.className = 'small text-muted mt-1';
+                label.textContent = t.name;
+                card.appendChild(img);
+                card.appendChild(label);
+                visualQcGallery.appendChild(card);
+            });
+            visualQcStatus.textContent = res.count
+                ? `${res.count} thumbnail(s).`
+                : 'No thumbnails yet - try "Backfill thumbnails for this project".';
+        } catch (error) {
+            visualQcStatus.textContent = error.message;
+        }
+    }
+
+    async function backfillThumbnails() {
+        const project = window.dsiUi.getCurrentProject() || {};
+        const outputDir = project.output_dir;
+        if (!outputDir) {
+            window.dsiUi.notify('Set an output directory on the New Project page first.', true);
+            return;
+        }
+        try {
+            const res = await window.dsiUi.fetchJson('/api/run/thumbnails', {
+                output_dir: outputDir,
+                project_root: project.project_root,
+            });
+            visualQcStatus.textContent = `Job started: ${res.job.job_id} - see "Backend Jobs" below; click "Refresh gallery" once it finishes.`;
+            window.dsiUi.refreshJobs();
+        } catch (error) {
+            window.dsiUi.notify(error.message, true);
+        }
+    }
+
+    visualQcHeader.addEventListener('click', () => {
+        const opening = visualQcBody.classList.contains('d-none');
+        visualQcBody.classList.toggle('d-none');
+        visualQcChevron.classList.toggle('fa-chevron-down', !opening);
+        visualQcChevron.classList.toggle('fa-chevron-up', opening);
+        if (opening) {
+            refreshThumbnailGallery();
+        }
+    });
+    document.getElementById('refreshThumbnailsBtn').addEventListener('click', refreshThumbnailGallery);
+    document.getElementById('backfillThumbnailsBtn').addEventListener('click', backfillThumbnails);
 })();
 </script>
 {% endblock %}

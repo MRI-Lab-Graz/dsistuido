@@ -15,6 +15,10 @@ Usage:
     
     # Force overwrite existing files (useful for regenerating corrupted files)
     python scripts/pipeline/dsi_studio_pipeline.py ... --skip_existing --force
+
+    # Rerun only specific subjects flagged by QC (see scripts/qa/run_qc.py),
+    # forcing SRC+FIB regeneration for just those, leaving everyone else alone
+    python scripts/pipeline/dsi_studio_pipeline.py ... --subject 1291076,1291111 --force all
 """
 
 import os
@@ -32,6 +36,9 @@ import signal
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple, Dict
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qa"))
+from src_thumbnail import ensure_src_thumbnail  # noqa: E402
 
 DEFAULT_APPTAINER_IMAGES_DIR = Path("/data/local/software/apptainer_images")
 
@@ -143,6 +150,7 @@ class DSIStudioPipeline:
                 self.force_components = {'src', 'fib', 'diffs', 'database'}
             else:
                 self.force_components.add(self.force_arg)
+        self.subject_filter = self._normalize_bids_filter_set(args.subject, "sub")
         self.session_filter = self._normalize_bids_filter(args.session, "ses")
         self.acq_filter = self._normalize_bids_filter(args.acq, "acq")
         self.space_filter = self._normalize_bids_filter(args.space, "space")
@@ -1113,6 +1121,29 @@ class DSIStudioPipeline:
         return v
 
     @staticmethod
+    def _normalize_bids_filter_set(value: Optional[str], prefix: str) -> Optional[set]:
+        """Like _normalize_bids_filter, but for a comma-separated list of
+        values - used by --subject, where naming more than one specific ID
+        at once is the common case (e.g. rerunning a handful of subjects a
+        QC pass flagged), unlike --session/--acq/--space which only ever
+        take a single value.
+        """
+        if not value:
+            return None
+        v = value.strip()
+        if not v or v.lower() == "all":
+            return None
+        values = set()
+        for item in v.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if item.lower().startswith(f"{prefix}-"):
+                item = item[len(prefix) + 1:]
+            values.add(item.lower())
+        return values or None
+
+    @staticmethod
     def _parse_bids_entities(path: Path) -> Dict[str, str]:
         """Parse 'key-value' BIDS entities out of a filename, e.g.
         'sub-1_ses-1_acq-multi_space-ACPC_desc-preproc_dwi.nii.gz' ->
@@ -1127,9 +1158,11 @@ class DSIStudioPipeline:
         return entities
 
     def _matches_bids_filters(self, path: Path) -> bool:
-        if not (self.session_filter or self.acq_filter or self.space_filter):
+        if not (self.subject_filter or self.session_filter or self.acq_filter or self.space_filter):
             return True
         entities = self._parse_bids_entities(path)
+        if self.subject_filter and entities.get("sub", "").lower() not in self.subject_filter:
+            return False
         if self.session_filter and entities.get("ses", "").lower() != self.session_filter.lower():
             return False
         if self.acq_filter and entities.get("acq", "").lower() != self.acq_filter.lower():
@@ -1175,11 +1208,12 @@ class DSIStudioPipeline:
         if not all_dwi:
             all_dwi = list(self.qsiprep_dir.glob("*_desc-preproc_dwi.nii.gz"))
 
-        if self.session_filter or self.acq_filter or self.space_filter:
+        if self.subject_filter or self.session_filter or self.acq_filter or self.space_filter:
             before = len(all_dwi)
             all_dwi = [f for f in all_dwi if self._matches_bids_filters(f)]
+            subject_desc = ",".join(sorted(self.subject_filter)) if self.subject_filter else "all"
             self.logger.info(
-                f"BIDS filter (session={self.session_filter or 'all'}, "
+                f"BIDS filter (subject={subject_desc}, session={self.session_filter or 'all'}, "
                 f"acq={self.acq_filter or 'all'}, space={self.space_filter or 'all'}): "
                 f"{len(all_dwi)}/{before} files matched"
             )
@@ -1244,6 +1278,27 @@ class DSIStudioPipeline:
         self.logger.info(f"Found {len(valid_dwi)} valid DWI files")
         return valid_dwi
 
+    def _collect_all_fib_files_for_database(self) -> List[Path]:
+        """Every FIB file currently on disk for the configured method,
+        across every subject - unfiltered by --subject/--session/--acq/
+        --space, unlike this run's own fib_files list. Used solely for the
+        main connectometry.db.fib.gz build/rebuild, so a run scoped to a
+        handful of subjects rebuilds the *whole* shared database from
+        everything that exists rather than just what this invocation
+        happened to touch. See the call site in run() for why that
+        distinction matters.
+        """
+        method_suffixes = {
+            '4': ['.odf.gqi.fz'],  # GQI
+            '7': ['.odf.qsdr.fz'],  # QSDR
+        }
+        method_key = str(self.method) if self.method else '4'
+        expected_suffixes = method_suffixes.get(method_key, ['*'])
+        all_fibs: List[Path] = []
+        for suffix in expected_suffixes:
+            all_fibs.extend(self.output_dir.glob(f"sub-*/fib/*{suffix}"))
+        return sorted(set(all_fibs))
+
     def find_existing_fib_files(self) -> List[Path]:
         """Find already-generated FIB files for connectivity-only mode.
 
@@ -1268,6 +1323,12 @@ class DSIStudioPipeline:
         all_fibs: List[Path] = []
         for suffix in expected_suffixes:
             all_fibs.extend(self.output_dir.glob(f"sub-*/fib/*{suffix}"))
+
+        if self.subject_filter:
+            before = len(all_fibs)
+            all_fibs = [f for f in all_fibs if self._parse_sub_ses(f)[0].replace("sub-", "").lower() in self.subject_filter]
+            subject_desc = ",".join(sorted(self.subject_filter))
+            self.logger.info(f"Subject filter ({subject_desc}): {len(all_fibs)}/{before} FIB files matched")
 
         if self.session_filter:
             before = len(all_fibs)
@@ -1394,6 +1455,16 @@ class DSIStudioPipeline:
                     self.logger.error(f"SRC file not found at {output_src} or {zipped_src}")
                     return None
             self.stats["src_ok"] += 1
+            if not self.dry_run:
+                # Best-effort visual QC: one mid-axial slice, saved right
+                # away so a bad-looking subject can be spotted the moment
+                # it's processed instead of only surfacing later in a
+                # separate QC pass. Never blocks/fails the pipeline run.
+                thumb = ensure_src_thumbnail(output_src, self.output_dir / "reports" / "thumbnails")
+                if thumb:
+                    self.logger.info(f"Saved slice thumbnail: {thumb.name}")
+                else:
+                    self.logger.warning(f"Could not render slice thumbnail for {output_src.name}")
             return output_src
         return None
 
@@ -1964,21 +2035,30 @@ class DSIStudioPipeline:
         # --- Final Database Check ---
         # Check if all subjects from participants.tsv are processed
         if not self.pilot:
+            # The shared connectometry.db.fib.gz is a whole-cohort database,
+            # not something scoped to a single invocation - always rebuild it
+            # from every FIB file currently on disk, not just this run's
+            # fib_files. Using fib_files here would mean any run narrowed
+            # with --subject/--session/--acq/--space (e.g. rerunning a
+            # handful of QC-flagged subjects) silently overwrites the shared
+            # database with only that narrow subset, discarding every other
+            # subject already in it.
+            all_fibs_on_disk = self._collect_all_fib_files_for_database()
             expected_subjects = self._load_participants_tsv()
             if expected_subjects:
-                processed_subjects = set(self.subject_details.keys())
+                processed_subjects = {self._parse_sub_ses(f)[0] for f in all_fibs_on_disk}
                 expected_set = set(expected_subjects)
                 missing = expected_set - processed_subjects
-                
+
                 if missing:
                     self.logger.warning(f"Not all subjects processed. Missing: {sorted(missing)}")
                     self.logger.warning("Skipping database creation until all subjects are complete.")
-                elif fib_files:
+                elif all_fibs_on_disk:
                     self.logger.info("All subjects from participants.tsv processed successfully!")
-                    self.create_database(fib_files)
-            elif fib_files:
+                    self.create_database(all_fibs_on_disk)
+            elif all_fibs_on_disk:
                 # No participants.tsv, create database anyway
-                self.create_database(fib_files)
+                self.create_database(all_fibs_on_disk)
         
         self._finalize_run(dwi_files, fib_files)
 
@@ -2136,6 +2216,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip_existing", action="store_true", help="Skip subjects if SRC/FIB already exist")
     parser.add_argument("--force", nargs='?', const='all', help="Force overwrite: 'database' (only db), 'diffs', 'src', 'fib', 'all' (default: all)")
     parser.add_argument("--min_file_age", type=int, default=300, help="Minimum file age in seconds (default: 300s/5min) to avoid processing files still being written. Ignored under --qsiprep_datalad, where files are freshly fetched on demand and their local mtime reflects fetch time, not whether the source data is still being written.")
+    parser.add_argument("--subject", default="all", help="Comma-separated subject ID(s) to (re)process, e.g. 'sub-1291076,sub-1291111' or '1291076,1291111' (default: all subjects). Combine with --force (e.g. --subject 1291076,1291111 --force fib) to regenerate just the subjects a QC pass flagged, without touching the rest of the cohort.")
     parser.add_argument("--session", default="all", help="BIDS session to process, e.g. 'ses-1' or '1' (default: all sessions)")
     parser.add_argument("--acq", default="all", help="BIDS acq tag to filter by, e.g. 'multi' (default: all)")
     parser.add_argument("--space", default="all", help="BIDS space tag to filter by, e.g. 'ACPC' (default: all)")

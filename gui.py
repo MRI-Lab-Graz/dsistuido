@@ -33,11 +33,14 @@ from typing import Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from flask import Flask, jsonify, render_template, request, redirect, url_for
+from flask import Flask, jsonify, render_template, request, redirect, url_for, send_file
 from waitress import serve
 
 REPO_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = REPO_DIR / "scripts"
+
+sys.path.insert(0, str(SCRIPTS_DIR / "qa"))
+from src_thumbnail import parse_sub_ses as _parse_thumbnail_sub_ses  # noqa: E402
 TEMPLATES_DIR = REPO_DIR / "templates"
 LOG_DIR = SCRIPTS_DIR / "web_logs"
 SETTINGS_DIR = SCRIPTS_DIR / "web_settings"
@@ -426,6 +429,7 @@ def build_pipeline_command(payload: Dict) -> List[str]:
         "force": "--force",
         "apptainer_image": "--apptainer_image",
         "apptainer_bind": "--apptainer_bind",
+        "subject": "--subject",
         "session": "--session",
         "acq": "--acq",
         "space": "--space",
@@ -474,6 +478,8 @@ def build_qa_command(payload: Dict) -> List[str]:
         "apptainer_image": "--apptainer_image",
         "min_coherence": "--min_coherence",
         "min_r2": "--min_r2",
+        "borderline_margin": "--borderline_margin",
+        "flagged_subjects_out": "--flagged_subjects_out",
     }
     for field, flag in optional_args.items():
         value = payload.get(field)
@@ -486,6 +492,25 @@ def build_qa_command(payload: Dict) -> List[str]:
     for flag in ["apptainer", "skip_src", "skip_fib"]:
         if payload.get(flag):
             cmd.append(f"--{flag}")
+
+    return cmd
+
+
+def build_thumbnails_command(payload: Dict) -> List[str]:
+    if not payload.get("output_dir"):
+        raise ValueError("Missing required field: output_dir")
+
+    cmd = [
+        sys.executable,
+        str(SCRIPTS_DIR / "qa" / "src_thumbnail.py"),
+        payload["output_dir"],
+    ]
+    if payload.get("thumbnails_dir"):
+        cmd.extend(["--thumbnails_dir", payload["thumbnails_dir"]])
+    if payload.get("slice_frac") not in (None, ""):
+        cmd.extend(["--slice_frac", str(payload["slice_frac"])])
+    if payload.get("force"):
+        cmd.append("--force")
 
     return cmd
 
@@ -781,6 +806,71 @@ def api_run_qa():
         return _json_error(str(exc), 400)
     except Exception as exc:  # noqa: BLE001
         return _json_error(str(exc), 400)
+
+
+@app.route("/api/run/thumbnails", methods=["POST"])
+def api_run_thumbnails():
+    """Backfill slice thumbnails for every SRC file already processed in a
+    project (dsi_studio_pipeline.py only renders one for SRC files it
+    generates itself going forward - this covers subjects processed before
+    that hook existed, or after --force regenerated a SRC in place).
+    """
+    try:
+        payload = _get_json_payload()
+        cmd = build_thumbnails_command(payload)
+        job = launch_job(cmd, job_type="thumbnails", cwd=REPO_DIR, project_root=payload.get("project_root"))
+        return jsonify({"ok": True, "job": job, "cmd": cmd})
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    except Exception as exc:  # noqa: BLE001
+        return _json_error(str(exc), 400)
+
+
+@app.route("/api/qc/thumbnails", methods=["GET"])
+def api_qc_thumbnails():
+    """List slice thumbnails available for a project's output_dir, for the
+    Visual QC gallery panel. Scans <output_dir>/reports/thumbnails directly
+    (rather than trusting a possibly-stale manifest.json) so newly-rendered
+    thumbnails show up without needing a separate backfill run first.
+    """
+    output_dir_value = (request.args.get("output_dir") or "").strip()
+    if not output_dir_value:
+        return _json_error("Missing output_dir", 400)
+    output_dir = _resolve_input_path(output_dir_value)
+    thumbnails_dir = output_dir / "reports" / "thumbnails"
+    if not thumbnails_dir.is_dir():
+        return jsonify({"ok": True, "thumbnails": [], "count": 0})
+
+    entries = []
+    for png in sorted(thumbnails_dir.glob("*.png")):
+        sub, ses = _parse_thumbnail_sub_ses(png.stem)
+        entries.append({
+            "name": png.stem,
+            "subject": sub or None,
+            "session": ses or None,
+            "url": url_for("api_qc_thumbnail_file", output_dir=str(output_dir), name=png.name),
+        })
+    return jsonify({"ok": True, "thumbnails": entries, "count": len(entries)})
+
+
+@app.route("/api/qc/thumbnail_file", methods=["GET"])
+def api_qc_thumbnail_file():
+    """Serve one thumbnail PNG. `name` is constrained to a bare filename
+    (no path separators) and the resolved path is checked to stay inside
+    <output_dir>/reports/thumbnails - output_dir itself is user-supplied
+    (same trust model as the rest of this local-only tool's path picker),
+    but this still guards against a crafted `name` walking outside that
+    one subfolder.
+    """
+    output_dir_value = (request.args.get("output_dir") or "").strip()
+    name = (request.args.get("name") or "").strip()
+    if not output_dir_value or not name or "/" in name or "\\" in name:
+        return _json_error("Invalid output_dir or name", 400)
+    thumbnails_dir = _resolve_input_path(output_dir_value) / "reports" / "thumbnails"
+    target = (thumbnails_dir / name).resolve()
+    if target.parent != thumbnails_dir.resolve() or not target.is_file():
+        return _json_error("Thumbnail not found", 404)
+    return send_file(target, mimetype="image/png")
 
 
 @app.route("/api/run/connectometry", methods=["POST"])

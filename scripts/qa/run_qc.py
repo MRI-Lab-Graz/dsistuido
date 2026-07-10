@@ -28,6 +28,11 @@ almost daily, so an unpinned "latest" would silently drift out of sync.
 Use --apptainer_image for a one-off check against a different build (doesn't
 change the pin), or --dsi_studio_cmd to bypass pinning entirely.
 
+Every flagged FIB/SRC file's subject ID is also collected into
+<output_dir>/flagged_subjects.txt (comma-joined, one line) so it can be pasted
+straight into dsi_studio_pipeline.py's --subject to rerun just those subjects,
+e.g. after regenerating them with a fixed mask/normalization step upstream.
+
 Usage:
     python scripts/qa/run_qc.py /data/local/134_AF19/derivatives/dsistudio
     python scripts/qa/run_qc.py /data/local/122_AF17/derivatives/dsistudio/fib --skip_src
@@ -220,20 +225,36 @@ def summarize_src(rows):
     return flagged
 
 
-def summarize_fib(rows, min_coherence, min_r2):
+def summarize_fib(rows, min_coherence, min_r2, borderline_margin=0.0):
     # R2 (QSDR) is only reported for QSDR reconstructions -- GQI rows leave it
     # blank. Treating a blank as 0 would flag every GQI file as failing R2,
     # which isn't a real signal, so only apply the R2 threshold when a value
     # was actually reported.
+    #
+    # A fixed cutoff alone is known to miss real, visually-obvious distortion:
+    # on a real project, two subjects an analyst flagged by eye had R2 sitting
+    # right at the cohort mean (~0.71-0.72, only just above the 0.6 default
+    # cutoff) while several other equally-mediocre files near that same value
+    # were never manually flagged either way - the metric doesn't cleanly
+    # separate those cases. borderline_margin surfaces files within that
+    # margin *above* the cutoff as a second, lower-confidence tier so a human
+    # can eyeball the close calls instead of trusting the hard cutoff alone.
     flagged = []
+    borderline = []
     for row in rows:
         coherence = float(row.get("Coherence Index") or 0)
         r2_raw = row.get("R2 (QSDR)")
+        r2 = float(r2_raw) if r2_raw else None
         low_coherence = coherence < min_coherence
-        low_r2 = bool(r2_raw) and float(r2_raw) < min_r2
+        low_r2 = r2 is not None and r2 < min_r2
         if low_coherence or low_r2:
-            flagged.append((row["FileName"], coherence, float(r2_raw) if r2_raw else None))
-    return flagged
+            flagged.append((row["FileName"], coherence, r2))
+        elif borderline_margin > 0 and (
+            coherence < min_coherence + borderline_margin
+            or (r2 is not None and r2 < min_r2 + borderline_margin)
+        ):
+            borderline.append((row["FileName"], coherence, r2))
+    return flagged, borderline
 
 
 def main():
@@ -248,6 +269,8 @@ def main():
     parser.add_argument("--skip_fib", action="store_true", help="Skip the .fz pass")
     parser.add_argument("--min_coherence", type=float, default=0.7, help="Flag FIB files below this Coherence Index (default: 0.7)")
     parser.add_argument("--min_r2", type=float, default=0.6, help="Flag FIB files below this R2 (default: 0.6)")
+    parser.add_argument("--borderline_margin", type=float, default=0.05, help="Also list FIB files within this margin ABOVE min_coherence/min_r2 as a lower-confidence 'borderline' tier, for manual review (default: 0.05; set 0 to disable). Fixed cutoffs alone are known to miss real distortion sitting just above the line - see summarize_fib().")
+    parser.add_argument("--flagged_subjects_out", help="Write bare subject IDs (no 'sub-' prefix) for every flagged (not borderline) file to this path, comma-joined on one line, ready to paste into dsi_studio_pipeline.py's --subject (default: <output_dir>/flagged_subjects.txt)")
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir).resolve()
@@ -258,6 +281,8 @@ def main():
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    flagged_names = set()  # every filename flagged by any pass -- feeds flagged_subjects_out
 
     if not args.skip_src:
         src_dir = resolve_search_dir(source_dir, "src", SRC_PATTERNS)
@@ -273,6 +298,7 @@ def main():
             print(f"  {len(rows)} file(s) checked, {len(flagged)} flagged (bad slices > 0 or outlier)")
             for name, bad_slices, outlier in flagged:
                 print(f"  ⚠️  {name}: bad_slices={bad_slices} outlier={outlier}")
+                flagged_names.add(name)
         else:
             print(f"No .sz/.src.gz files found in {src_dir}, skipping SRC QC")
 
@@ -290,11 +316,37 @@ def main():
             run_qc(dsi_studio_cmd, fib_patterns, out_path, check_btable=False, file_count=len(fib_files))
             dereference_report_filenames(out_path, fib_files)
             rows = load_tsv(out_path)
-            flagged = summarize_fib(rows, args.min_coherence, args.min_r2)
+            flagged, borderline = summarize_fib(rows, args.min_coherence, args.min_r2, args.borderline_margin)
             print(f"  {len(rows)} file(s) checked, {len(flagged)} flagged (Coherence < {args.min_coherence} or R2 < {args.min_r2})")
             for name, coherence, r2 in flagged:
                 r2_str = f"{r2:.3f}" if r2 is not None else "n/a"
                 print(f"  ⚠️  {name}: coherence={coherence:.3f} r2={r2_str}")
+                flagged_names.add(name)
+            if borderline:
+                print(f"  {len(borderline)} more file(s) borderline (within {args.borderline_margin} of the cutoff) - not auto-flagged, worth a manual look:")
+                for name, coherence, r2 in borderline:
+                    r2_str = f"{r2:.3f}" if r2 is not None else "n/a"
+                    print(f"    • {name}: coherence={coherence:.3f} r2={r2_str}")
+
+    if flagged_names:
+        subjects = sorted({
+            name.split("_")[0][len("sub-"):]
+            for name in flagged_names
+            if name.startswith("sub-")
+        })
+        if subjects:
+            out_path = Path(args.flagged_subjects_out).resolve() if args.flagged_subjects_out else output_dir / "flagged_subjects.txt"
+            out_path.write_text(",".join(subjects) + "\n")
+            print(f"\n{len(subjects)} subject(s) flagged across all passes -> {out_path}")
+            print(f"Rerun just these with e.g.:")
+            print(f"  python scripts/pipeline/dsi_studio_pipeline.py ... --subject {','.join(subjects)} --force fib")
+            print(
+                "Note: numeric QC thresholds don't catch every visually-obvious distortion (some "
+                "flagged-by-eye subjects sit right at the cohort average on Coherence/R2) - also spot-check "
+                "flagged and borderline subjects with the thumbnail/viewer tools in scripts/visualization/, "
+                "and check whether the same subject/session looks off in qsiprep's own output (registration/"
+                "normalization QC) since that's a common upstream source of this kind of distortion."
+            )
 
 
 if __name__ == "__main__":
