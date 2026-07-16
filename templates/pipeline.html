@@ -220,12 +220,36 @@
                 <div class="form-text">One-off check against a different build. Leave blank to use the project's pin from <code>code/dsistudio/dsi_studio_image.json</code> -- doesn't change the pin.</div>
             </div>
             <div class="col-md-3">
+                <label class="form-label">Min DWI contrast (SRC)</label>
+                <input class="form-control" id="qa_min_dwi_contrast" value="1.5" />
+                <div class="form-text">Flags a session even when #bad slices/outlier are 0 - a few outlier voxels can crush contrast across a whole volume without tripping either.</div>
+            </div>
+            <div class="col-md-3">
                 <label class="form-label">Min coherence (FIB)</label>
                 <input class="form-control" id="qa_min_coherence" value="0.7" />
             </div>
             <div class="col-md-3">
                 <label class="form-label">Min R2 (FIB)</label>
                 <input class="form-control" id="qa_min_r2" value="0.6" />
+            </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+            <div class="col-md-6">
+                <label class="form-label">QSIPrep directory (optional)</label>
+                <div class="input-group path-picker-group" data-picker-mode="dir">
+                    <input class="form-control" id="qa_qsiprep_dir" placeholder="defaults to this project's QSIPrep directory" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+                <div class="form-text">Also ingests qsiprep's own per-session <code>desc-image_qc.csv</code> (contrast + motion) - it's computed for every subject/session already since qsiprep always runs upstream, and it can catch damage DSI Studio's own SRC checks miss. Leave blank to use the current project's QSIPrep directory.</div>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Min DWI contrast (qsiprep)</label>
+                <input class="form-control" id="qa_min_dwi_contrast_qsiprep" value="1.3" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Max mean FD, mm (qsiprep)</label>
+                <input class="form-control" id="qa_max_mean_fd" value="0.4" />
             </div>
         </div>
 
@@ -502,6 +526,7 @@
     function checked(id) { return document.getElementById(id).checked; }
 
     function buildPayload() {
+        const qsiprepDir = value('qa_qsiprep_dir') || (window.dsiUi.getCurrentProject() || {}).qsiprep_dir || '';
         return {
             source_dir: value('qa_source'),
             output_dir: value('qa_output'),
@@ -510,8 +535,12 @@
             check_btable: checked('qa_check_btable'),
             skip_src: checked('qa_skip_src'),
             skip_fib: checked('qa_skip_fib'),
+            min_dwi_contrast: value('qa_min_dwi_contrast'),
             min_coherence: value('qa_min_coherence'),
             min_r2: value('qa_min_r2'),
+            qsiprep_dir: qsiprepDir,
+            min_dwi_contrast_qsiprep: value('qa_min_dwi_contrast_qsiprep'),
+            max_mean_fd: value('qa_max_mean_fd'),
         };
     }
 
@@ -521,8 +550,12 @@
             qa_source: 'source_dir',
             qa_output: 'output_dir',
             qa_apptainer_image: 'apptainer_image',
+            qa_min_dwi_contrast: 'min_dwi_contrast',
             qa_min_coherence: 'min_coherence',
             qa_min_r2: 'min_r2',
+            qa_qsiprep_dir: 'qsiprep_dir',
+            qa_min_dwi_contrast_qsiprep: 'min_dwi_contrast_qsiprep',
+            qa_max_mean_fd: 'max_mean_fd',
         };
         Object.keys(mapping).forEach(id => {
             const key = mapping[id];
@@ -611,27 +644,40 @@
                 `/api/qc/thumbnails?output_dir=${encodeURIComponent(outputDir)}`, undefined, 'GET'
             );
             visualQcGallery.innerHTML = '';
+            let flaggedCount = 0;
             (res.thumbnails || []).forEach((t) => {
+                const flags = t.flags || [];
+                const flagged = flags.some(f => f.tier === 'flagged');
+                const borderline = !flagged && flags.some(f => f.tier === 'borderline');
+                if (flagged) flaggedCount++;
+
                 const card = document.createElement('div');
-                card.className = 'text-center';
+                card.className = 'text-center position-relative';
                 const img = document.createElement('img');
                 img.src = t.url;
                 img.alt = t.name;
                 img.title = 'Click to open full size';
                 img.style.width = '100%';
-                img.style.border = '1px solid #ccc';
                 img.style.borderRadius = '4px';
                 img.style.cursor = 'zoom-in';
+                img.style.border = flagged ? '3px solid #dc3545' : (borderline ? '3px solid #ffc107' : '1px solid #ccc');
                 img.addEventListener('click', () => window.open(t.url, '_blank'));
                 const label = document.createElement('div');
                 label.className = 'small text-muted mt-1';
                 label.textContent = t.name;
                 card.appendChild(img);
+                if (flags.length) {
+                    const badge = document.createElement('span');
+                    badge.className = `badge position-absolute top-0 end-0 m-1 ${flagged ? 'bg-danger' : 'bg-warning text-dark'}`;
+                    badge.textContent = flagged ? '⚠' : '?';
+                    badge.title = flags.map(f => `[${f.source}] ${f.reason}`).join('\n');
+                    card.appendChild(badge);
+                }
                 card.appendChild(label);
                 visualQcGallery.appendChild(card);
             });
             visualQcStatus.textContent = res.count
-                ? `${res.count} thumbnail(s).`
+                ? `${res.count} thumbnail(s)${flaggedCount ? `, ${flaggedCount} flagged (see reports/qc_flags.json - run "Run QA" with a QSIPrep directory set to populate this)` : ''}.`
                 : 'No thumbnails yet - try "Backfill thumbnails for this project".';
         } catch (error) {
             visualQcStatus.textContent = error.message;

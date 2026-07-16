@@ -476,10 +476,14 @@ def build_qa_command(payload: Dict) -> List[str]:
         "output_dir": "--output_dir",
         "dsi_studio_cmd": "--dsi_studio_cmd",
         "apptainer_image": "--apptainer_image",
+        "min_dwi_contrast": "--min_dwi_contrast",
         "min_coherence": "--min_coherence",
         "min_r2": "--min_r2",
         "borderline_margin": "--borderline_margin",
         "flagged_subjects_out": "--flagged_subjects_out",
+        "qsiprep_dir": "--qsiprep_dir",
+        "min_dwi_contrast_qsiprep": "--min_dwi_contrast_qsiprep",
+        "max_mean_fd": "--max_mean_fd",
     }
     for field, flag in optional_args.items():
         value = payload.get(field)
@@ -832,6 +836,13 @@ def api_qc_thumbnails():
     Visual QC gallery panel. Scans <output_dir>/reports/thumbnails directly
     (rather than trusting a possibly-stale manifest.json) so newly-rendered
     thumbnails show up without needing a separate backfill run first.
+
+    Also cross-references <output_dir>/reports/qc_flags.json (written by
+    run_qc.py's --qsiprep_dir/SRC/FIB passes, keyed by "sub-X_ses-Y") so a
+    subject/session that numeric QC flagged shows up right on its thumbnail
+    card - a b0 slice alone can look like a perfectly normal brain even when
+    every b>0 shell is crushed (see src_thumbnail.py's docstring), so the
+    image by itself isn't enough; the flag has to ride along with it.
     """
     output_dir_value = (request.args.get("output_dir") or "").strip()
     if not output_dir_value:
@@ -841,14 +852,24 @@ def api_qc_thumbnails():
     if not thumbnails_dir.is_dir():
         return jsonify({"ok": True, "thumbnails": [], "count": 0})
 
+    qc_flags = {}
+    flags_path = output_dir / "reports" / "qc_flags.json"
+    if flags_path.is_file():
+        try:
+            qc_flags = json.loads(flags_path.read_text())
+        except (OSError, ValueError):
+            qc_flags = {}
+
     entries = []
     for png in sorted(thumbnails_dir.glob("*.png")):
         sub, ses = _parse_thumbnail_sub_ses(png.stem)
+        key = f"{sub}_{ses}" if sub and ses else (sub or png.stem)
         entries.append({
             "name": png.stem,
             "subject": sub or None,
             "session": ses or None,
             "url": url_for("api_qc_thumbnail_file", output_dir=str(output_dir), name=png.name),
+            "flags": qc_flags.get(key, []),
         })
     return jsonify({"ok": True, "thumbnails": entries, "count": len(entries)})
 
