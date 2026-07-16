@@ -28,11 +28,6 @@ almost daily, so an unpinned "latest" would silently drift out of sync.
 Use --apptainer_image for a one-off check against a different build (doesn't
 change the pin), or --dsi_studio_cmd to bypass pinning entirely.
 
-Every flagged FIB/SRC file's subject ID is also collected into
-<output_dir>/flagged_subjects.txt (comma-joined, one line) so it can be pasted
-straight into dsi_studio_pipeline.py's --subject to rerun just those subjects,
-e.g. after regenerating them with a fixed mask/normalization step upstream.
-
 Optionally also ingests qsiprep's own per-session QC (<qsiprep_dir>/sub-*/
 [ses-*/]dwi/*_desc-image_qc.csv), via --qsiprep_dir. qsiprep computes this for
 every subject/session already (it's the mandatory upstream step for this
@@ -40,15 +35,37 @@ pipeline), and it can catch damage DSI Studio's own SRC checks miss entirely:
 on a real project, a session with crushed contrast across every b>0 shell
 (caused by a handful of outlier voxels blowing out DSI Studio's SRC
 auto-scaling) had #bad_slices/outlier == 0 in DSI Studio's own QC, but
-qsiprep's t1post_dwi_contrast and mean_fd both flagged it clearly. See
-summarize_qsiprep().
+qsiprep's t1post_dwi_contrast and mean_fd both flagged it clearly.
 
-Every flagged/borderline file from every pass (SRC, FIB, qsiprep) is also
-collected into <output_dir>/qc_flags.json, keyed by "sub-X_ses-Y" (or bare
-"sub-X" if no session), so downstream tools - e.g. the web GUI's thumbnail
-gallery - can show *why* a given subject/session is worth a second look
-right next to its slice image, instead of requiring a separate look at raw
-tsv/csv reports.
+Severity, not a single pass/fail: every numeric metric (DWI contrast, bad
+slices, outlier, coherence, R2, qsiprep contrast, mean FD, ...) is graded
+against the *cohort's own distribution* from this same run (see
+metric_severity()) into severe / moderate / mild / ok, rather than one fixed
+absolute cutoff. A fixed cutoff alone either misses real distortion sitting
+just above the line, or - the opposite failure, seen on a real project -
+floods the output with near-identical "flagged" status for a trivially common
+value (e.g. "#bad slices > 0" alone flagged 44% of one real cohort with no way
+to tell a single incidental bad slice from a genuinely severe file) alongside
+the rare, actually-severe cases. Percentile-based severity self-calibrates to
+whatever cohort is actually being checked instead of a number tuned on a
+different project, and gives a graded signal a human can actually triage.
+
+Two consolidated outputs feed downstream tools (e.g. the web GUI's thumbnail
+gallery and QC dashboard) instead of requiring a separate look at raw tsv/csv
+reports:
+    <output_dir>/qc_flags.json   - "sub-X_ses-Y" -> list of {source, metric,
+                                    value, tier, reason}, tier in
+                                    severe/moderate/mild, only for sessions
+                                    with at least one non-"ok" metric.
+    <output_dir>/qc_metrics.json - every metric's raw value (and tier) for
+                                    every session that has it, regardless of
+                                    tier - the full cohort distribution, for
+                                    an MRIQC-style group scatter/box plot.
+
+Every severe/moderate session's subject ID is also collected into
+<output_dir>/flagged_subjects.txt (comma-joined, one line) so it can be pasted
+straight into dsi_studio_pipeline.py's --subject to rerun just those subjects,
+e.g. after regenerating them with a fixed mask/normalization step upstream.
 
 Usage:
     python scripts/qa/run_qc.py /data/local/134_AF19/derivatives/dsistudio
@@ -86,6 +103,12 @@ SRC_PATTERNS = ["*.sz", "*.src.gz"]
 FIB_PATTERNS = ["*.fz"]
 QSIPREP_QC_PATTERNS = ["sub-*/dwi/*_desc-image_qc.csv", "sub-*/ses-*/dwi/*_desc-image_qc.csv"]
 
+# Severity bands, as the worst fraction of the cohort a value needs to sit in
+# to earn each tier - e.g. "severe" means only ~2% of this same run's files
+# are this bad or worse. Ordered worst-first; the first band a value's
+# worst_fraction is under wins. Same bands apply to every metric.
+SEVERITY_BANDS = (("severe", 0.02), ("moderate", 0.10), ("mild", 0.25))
+
 _SUB_SES_RE = re.compile(r"(sub-[A-Za-z0-9]+)(?:_(ses-[A-Za-z0-9]+))?")
 
 
@@ -94,13 +117,46 @@ def qc_key(name: str) -> Optional[str]:
     '.src.gz.sz', '.odf.qsdr.fz', '_acq-multi', etc.) down to a common
     "sub-X_ses-Y" (or bare "sub-X") key, matching how thumbnail PNGs are
     named (see src_thumbnail.friendly_stem) - the shared key that lets
-    qc_flags.json be joined against the thumbnail gallery by subject/session
-    regardless of which pass (SRC/FIB/qsiprep) produced the flag."""
+    qc_flags.json/qc_metrics.json be joined against the thumbnail gallery by
+    subject/session regardless of which pass (SRC/FIB/qsiprep) produced it."""
     m = _SUB_SES_RE.match(name)
     if not m:
         return None
     sub, ses = m.group(1), m.group(2)
     return f"{sub}_{ses}" if ses else sub
+
+
+def worst_fraction(values, value: float, worse_is_high: bool) -> float:
+    """Fraction of `values` that is as bad or worse than `value` - e.g. 0.02
+    means only the worst 2% of this cohort (including this one) reaches this
+    value or beyond. Ties count as "as bad", matching the intuitive "how rare
+    is a value this extreme" reading. O(n) per call, fine at QC-report scale
+    (hundreds to a few thousand rows)."""
+    n = len(values)
+    if n == 0:
+        return 1.0
+    as_bad_or_worse = sum(1 for v in values if (v >= value if worse_is_high else v <= value))
+    return as_bad_or_worse / n
+
+
+def severity_tier(frac: float) -> str:
+    for tier, cutoff in SEVERITY_BANDS:
+        if frac < cutoff:
+            return tier
+    return "ok"
+
+
+def metric_severity(values, value: float, worse_is_high: bool):
+    """Returns (tier, worst_fraction) for one value against its cohort."""
+    frac = worst_fraction(values, value, worse_is_high)
+    return severity_tier(frac), frac
+
+
+_TIER_RANK = {"ok": 0, "mild": 1, "moderate": 2, "severe": 3}
+
+
+def worse_tier(a: str, b: str) -> str:
+    return a if _TIER_RANK[a] >= _TIER_RANK[b] else b
 
 
 def find_project_pin(source_dir: Path) -> Path | None:
@@ -252,63 +308,69 @@ def load_tsv(path: Path):
         return [row for row in reader if not any(v is None for v in row.values())]
 
 
-def summarize_src(rows, min_dwi_contrast, borderline_margin=0.0):
-    # DWI contrast is DSI Studio's own signal-vs-noise metric, and it can catch
-    # damage that #bad slices/outlier miss entirely: a handful of extreme-
-    # intensity outlier voxels in a b0 volume (e.g. a susceptibility/lipid
-    # spike near the orbits) forces DSI Studio's 8-bit auto-scaling during SRC
-    # conversion to crush contrast across the *whole* volume, every b>0 shell
-    # included - visible in DSI Studio's own GUI as near-black DWI slices.
-    # Confirmed against a real project: the file with the worst DWI contrast
-    # in the whole cohort (1.197, next-worst 1.24, cohort median 2.25) had
-    # bad_slices=1, outlier=0 - i.e. invisible to the existing checks despite
-    # being the single worst file in the dataset. Same borderline_margin idea
-    # as summarize_fib: a fixed cutoff alone is known to miss real distortion
-    # sitting just above the line.
-    flagged = []
-    borderline = []
-    for row in rows:
-        bad_slices = int(row.get("#bad slices") or 0)
-        outlier = int(row.get("outlier") or 0)
-        contrast = float(row.get("DWI contrast") or 0)
-        low_contrast = contrast < min_dwi_contrast
-        if bad_slices > 0 or outlier > 0 or low_contrast:
-            flagged.append((row["file name"], bad_slices, outlier, contrast))
-        elif borderline_margin > 0 and contrast < min_dwi_contrast + borderline_margin:
-            borderline.append((row["file name"], contrast))
-    return flagged, borderline
+def _to_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
-def summarize_fib(rows, min_coherence, min_r2, borderline_margin=0.0):
-    # R2 (QSDR) is only reported for QSDR reconstructions -- GQI rows leave it
-    # blank. Treating a blank as 0 would flag every GQI file as failing R2,
-    # which isn't a real signal, so only apply the R2 threshold when a value
-    # was actually reported.
-    #
-    # A fixed cutoff alone is known to miss real, visually-obvious distortion:
-    # on a real project, two subjects an analyst flagged by eye had R2 sitting
-    # right at the cohort mean (~0.71-0.72, only just above the 0.6 default
-    # cutoff) while several other equally-mediocre files near that same value
-    # were never manually flagged either way - the metric doesn't cleanly
-    # separate those cases. borderline_margin surfaces files within that
-    # margin *above* the cutoff as a second, lower-confidence tier so a human
-    # can eyeball the close calls instead of trusting the hard cutoff alone.
-    flagged = []
-    borderline = []
+# Each metric spec: (metric_key, label, column name in the source rows,
+# worse_is_high). Shared by summarize_src/summarize_fib/summarize_qsiprep and
+# by the metrics.json writer, so the severity grading and the group
+# scatter/box plot are always built from exactly the same numbers.
+SRC_METRICS = [
+    ("src_dwi_contrast", "SRC: DWI contrast", "DWI contrast", False),
+    ("src_bad_slices", "SRC: #bad slices", "#bad slices", True),
+    ("src_outlier", "SRC: outlier", "outlier", True),
+]
+FIB_METRICS = [
+    ("coherence", "FIB: Coherence Index", "Coherence Index", False),
+    ("r2", "FIB: R2 (QSDR)", "R2 (QSDR)", False),
+]
+QSIPREP_METRICS = [
+    ("qsiprep_dwi_contrast", "qsiprep: t1post DWI contrast", "t1post_dwi_contrast", False),
+    ("qsiprep_mean_fd", "qsiprep: mean FD (mm)", "mean_fd", True),
+]
+
+
+def summarize_metrics(rows, name_col, metrics, source, name_prefix=""):
+    """Generic pass: for every metric spec, grade every row's value against
+    the *other rows in this same call* (the cohort for this pass) and return
+    (flags, metric_points).
+
+    flags: list of (name, tier, [(metric_key, value, tier, frac), ...]) for
+    rows with at least one non-"ok" metric - only those make it into
+    qc_flags.json.
+
+    metric_points: {metric_key: {name: (value, tier)}} for every row that has
+    a numeric value for that metric, regardless of tier - the full
+    distribution, for qc_metrics.json/the group scatter plot.
+    """
+    columns = {}
+    for metric_key, _label, column, worse_is_high in metrics:
+        columns[metric_key] = [_to_float(row.get(column)) for row in rows if row.get(column) not in (None, "")]
+
+    flags = []
+    metric_points = {metric_key: {} for metric_key, *_ in metrics}
     for row in rows:
-        coherence = float(row.get("Coherence Index") or 0)
-        r2_raw = row.get("R2 (QSDR)")
-        r2 = float(r2_raw) if r2_raw else None
-        low_coherence = coherence < min_coherence
-        low_r2 = r2 is not None and r2 < min_r2
-        if low_coherence or low_r2:
-            flagged.append((row["FileName"], coherence, r2))
-        elif borderline_margin > 0 and (
-            coherence < min_coherence + borderline_margin
-            or (r2 is not None and r2 < min_r2 + borderline_margin)
-        ):
-            borderline.append((row["FileName"], coherence, r2))
-    return flagged, borderline
+        name = name_prefix + (row.get(name_col) or "")
+        row_metrics = []
+        for metric_key, label, column, worse_is_high in metrics:
+            raw = row.get(column)
+            if raw in (None, ""):
+                continue
+            value = _to_float(raw)
+            tier, frac = metric_severity(columns[metric_key], value, worse_is_high)
+            metric_points[metric_key][name] = (value, tier)
+            if tier != "ok":
+                row_metrics.append((metric_key, label, value, tier, frac))
+        if row_metrics:
+            overall = "ok"
+            for *_rest, tier, _frac in row_metrics:
+                overall = worse_tier(overall, tier)
+            flags.append((name, overall, row_metrics, source))
+    return flags, metric_points
 
 
 def find_qsiprep_image_qc(qsiprep_dir: Path):
@@ -329,43 +391,6 @@ def load_qsiprep_qc(files):
     return rows
 
 
-def summarize_qsiprep(rows, min_dwi_contrast, max_mean_fd, borderline_margin=0.0):
-    # qsiprep computes its own DWI contrast (t1post_dwi_contrast, on the same
-    # post-registration data DSI Studio's SRC is built from) and mean framewise
-    # displacement (motion) for every subject/session already - this pass is
-    # "free" in that it re-runs nothing, just reads what qsiprep already wrote.
-    # It matters because it can flag exactly what DSI Studio's own SRC QC
-    # misses: confirmed on a real project, a session with a b0 outlier-voxel
-    # cluster crushing contrast across every b>0 shell had DSI Studio's own
-    # #bad slices/outlier both at 0, but qsiprep's t1post_dwi_contrast (1.128
-    # vs cohort median 1.91) and mean_fd (0.499 vs cohort median 0.153, ~p98)
-    # both flagged it independently. Same borderline_margin idea as
-    # summarize_fib/summarize_src - a fixed cutoff alone is known to miss real
-    # distortion sitting just above the line.
-    flagged = []
-    borderline = []
-    for row in rows:
-        name = row.get("file_name") or ""
-        try:
-            contrast = float(row.get("t1post_dwi_contrast") or 0)
-        except ValueError:
-            contrast = 0.0
-        try:
-            mean_fd = float(row.get("mean_fd") or 0)
-        except ValueError:
-            mean_fd = 0.0
-        low_contrast = contrast < min_dwi_contrast
-        high_motion = mean_fd > max_mean_fd
-        if low_contrast or high_motion:
-            flagged.append((name, contrast, mean_fd))
-        elif borderline_margin > 0 and (
-            contrast < min_dwi_contrast + borderline_margin
-            or mean_fd > max_mean_fd - borderline_margin
-        ):
-            borderline.append((name, contrast, mean_fd))
-    return flagged, borderline
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("source_dir", help="Directory containing .sz/.src.gz and/or .fz files")
@@ -376,14 +401,8 @@ def main():
     parser.add_argument("--check_btable", type=int, default=1, choices=[0, 1], help="Passed through to the SRC qc pass (default: 1)")
     parser.add_argument("--skip_src", action="store_true", help="Skip the .sz/.src.gz pass")
     parser.add_argument("--skip_fib", action="store_true", help="Skip the .fz pass")
-    parser.add_argument("--min_dwi_contrast", type=float, default=1.5, help="Flag SRC files below this DWI contrast (default: 1.5) - catches cases like a susceptibility/lipid outlier voxel crushing 8-bit auto-scaling across a whole volume, which #bad slices/outlier alone can miss")
-    parser.add_argument("--min_coherence", type=float, default=0.7, help="Flag FIB files below this Coherence Index (default: 0.7)")
-    parser.add_argument("--min_r2", type=float, default=0.6, help="Flag FIB files below this R2 (default: 0.6)")
-    parser.add_argument("--borderline_margin", type=float, default=0.05, help="Also list SRC/FIB files within this margin ABOVE min_dwi_contrast/min_coherence/min_r2 as a lower-confidence 'borderline' tier, for manual review (default: 0.05; set 0 to disable). Fixed cutoffs alone are known to miss real distortion sitting just above the line - see summarize_fib().")
-    parser.add_argument("--flagged_subjects_out", help="Write bare subject IDs (no 'sub-' prefix) for every flagged (not borderline) file to this path, comma-joined on one line, ready to paste into dsi_studio_pipeline.py's --subject (default: <output_dir>/flagged_subjects.txt)")
-    parser.add_argument("--qsiprep_dir", help="Also ingest qsiprep's own per-session QC (sub-*/[ses-*/]dwi/*_desc-image_qc.csv) from this directory - qsiprep already computes this for every subject/session, and it can catch damage DSI Studio's own SRC checks miss (see summarize_qsiprep()). Omit to skip this pass entirely.")
-    parser.add_argument("--min_dwi_contrast_qsiprep", type=float, default=1.3, help="Flag sessions below this qsiprep t1post_dwi_contrast (default: 1.3, calibrated against a real cohort's ~5%% worst-contrast tail). Only used with --qsiprep_dir.")
-    parser.add_argument("--max_mean_fd", type=float, default=0.4, help="Flag sessions above this qsiprep mean framewise displacement in mm (default: 0.4, calibrated against a real cohort's ~p98 motion tail). Only used with --qsiprep_dir.")
+    parser.add_argument("--flagged_subjects_out", help="Write bare subject IDs (no 'sub-' prefix) for every severe/moderate file to this path, comma-joined on one line, ready to paste into dsi_studio_pipeline.py's --subject (default: <output_dir>/flagged_subjects.txt)")
+    parser.add_argument("--qsiprep_dir", help="Also ingest qsiprep's own per-session QC (sub-*/[ses-*/]dwi/*_desc-image_qc.csv) from this directory - qsiprep already computes this for every subject/session, and it can catch damage DSI Studio's own SRC checks miss. Omit to skip this pass entirely.")
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir).resolve()
@@ -395,13 +414,31 @@ def main():
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    flagged_names = set()  # every filename flagged by any pass -- feeds flagged_subjects_out
-    qc_flags: dict = {}  # "sub-X_ses-Y" -> list of {source, reason, tier} -- feeds qc_flags.json
+    flagged_names = set()  # every filename with a severe/moderate metric -- feeds flagged_subjects_out
+    qc_flags: dict = {}  # "sub-X_ses-Y" -> list of {source, metric, value, tier, reason} -- feeds qc_flags.json
+    qc_metrics: dict = {}  # metric_key -> {"label":..., "worse_is_high":..., "values": {name: {"value":..., "tier":...}}}
 
-    def add_flag(name, source, reason, tier="flagged"):
-        key = qc_key(name)
-        if key:
-            qc_flags.setdefault(key, []).append({"source": source, "reason": reason, "tier": tier})
+    def record_metric_points(metric_key, label, worse_is_high, points):
+        bucket = qc_metrics.setdefault(metric_key, {"label": label, "worse_is_high": worse_is_high, "values": {}})
+        for name, (value, tier) in points.items():
+            key = qc_key(name)
+            if key:
+                bucket["values"][key] = {"value": value, "tier": tier}
+
+    def add_flags(flags):
+        for name, overall_tier, row_metrics, source in flags:
+            metric_str = " ".join(f"{mk}={v:.3f}[{t}]" for mk, _label, v, t, _f in row_metrics)
+            print(f"  {'⚠️ ' if overall_tier == 'severe' else '• '}{name}: {overall_tier} - {metric_str}")
+            if overall_tier in ("severe", "moderate"):
+                flagged_names.add(name)
+            key = qc_key(name)
+            if not key:
+                continue
+            for metric_key, label, value, tier, frac in row_metrics:
+                reason = f"{label}={value:.3f} (worst {frac * 100:.0f}% of cohort)"
+                qc_flags.setdefault(key, []).append({
+                    "source": source, "metric": metric_key, "value": value, "tier": tier, "reason": reason,
+                })
 
     if not args.skip_src:
         src_dir = resolve_search_dir(source_dir, "src", SRC_PATTERNS)
@@ -413,23 +450,11 @@ def main():
             run_qc(dsi_studio_cmd, src_patterns, out_path, bool(args.check_btable), len(src_files))
             dereference_report_filenames(out_path, src_files)
             rows = load_tsv(out_path)
-            flagged, borderline = summarize_src(rows, args.min_dwi_contrast, args.borderline_margin)
-            print(
-                f"  {len(rows)} file(s) checked, {len(flagged)} flagged "
-                f"(bad slices > 0, outlier > 0, or DWI contrast < {args.min_dwi_contrast})"
-            )
-            for name, bad_slices, outlier, contrast in flagged:
-                print(f"  ⚠️  {name}: bad_slices={bad_slices} outlier={outlier} dwi_contrast={contrast:.3f}")
-                flagged_names.add(name)
-                add_flag(name, "src", f"bad_slices={bad_slices} outlier={outlier} dwi_contrast={contrast:.3f}")
-            if borderline:
-                print(
-                    f"  {len(borderline)} more file(s) borderline on DWI contrast (within "
-                    f"{args.borderline_margin} of the cutoff) - not auto-flagged, worth a manual look:"
-                )
-                for name, contrast in borderline:
-                    print(f"    • {name}: dwi_contrast={contrast:.3f}")
-                    add_flag(name, "src", f"dwi_contrast={contrast:.3f} (borderline)", tier="borderline")
+            flags, metric_points = summarize_metrics(rows, "file name", SRC_METRICS, "src")
+            print(f"  {len(rows)} file(s) checked, {len(flags)} with at least one non-ok metric:")
+            add_flags(flags)
+            for metric_key, label, _column, worse_is_high in SRC_METRICS:
+                record_metric_points(metric_key, label, worse_is_high, metric_points[metric_key])
         else:
             print(f"No .sz/.src.gz files found in {src_dir}, skipping SRC QC")
 
@@ -439,27 +464,20 @@ def main():
             ("QSDR", find_files(fib_dir, FIB_PATTERNS), [fib_dir / p for p in FIB_PATTERNS], output_dir / "fz_qc_qsdr.tsv"),
             ("GQI", find_subject_files(source_dir, "fib", FIB_PATTERNS), [source_dir / f"sub-*/fib/{p}" for p in FIB_PATTERNS], output_dir / "fz_qc_gqi.tsv"),
         ]
-        for label, fib_files, fib_patterns, out_path in fib_passes:
+        for label_name, fib_files, fib_patterns, out_path in fib_passes:
             if not fib_files:
-                print(f"No {label} .fz files found under {source_dir}, skipping {label} FIB QC")
+                print(f"No {label_name} .fz files found under {source_dir}, skipping {label_name} FIB QC")
                 continue
-            print(f"Running {label} FIB QC on {len(fib_files)} file(s) -> {out_path}")
+            print(f"Running {label_name} FIB QC on {len(fib_files)} file(s) -> {out_path}")
             run_qc(dsi_studio_cmd, fib_patterns, out_path, check_btable=False, file_count=len(fib_files))
             dereference_report_filenames(out_path, fib_files)
             rows = load_tsv(out_path)
-            flagged, borderline = summarize_fib(rows, args.min_coherence, args.min_r2, args.borderline_margin)
-            print(f"  {len(rows)} file(s) checked, {len(flagged)} flagged (Coherence < {args.min_coherence} or R2 < {args.min_r2})")
-            for name, coherence, r2 in flagged:
-                r2_str = f"{r2:.3f}" if r2 is not None else "n/a"
-                print(f"  ⚠️  {name}: coherence={coherence:.3f} r2={r2_str}")
-                flagged_names.add(name)
-                add_flag(name, f"fib_{label.lower()}", f"coherence={coherence:.3f} r2={r2_str}")
-            if borderline:
-                print(f"  {len(borderline)} more file(s) borderline (within {args.borderline_margin} of the cutoff) - not auto-flagged, worth a manual look:")
-                for name, coherence, r2 in borderline:
-                    r2_str = f"{r2:.3f}" if r2 is not None else "n/a"
-                    print(f"    • {name}: coherence={coherence:.3f} r2={r2_str}")
-                    add_flag(name, f"fib_{label.lower()}", f"coherence={coherence:.3f} r2={r2_str} (borderline)", tier="borderline")
+            source = f"fib_{label_name.lower()}"
+            flags, metric_points = summarize_metrics(rows, "FileName", FIB_METRICS, source)
+            print(f"  {len(rows)} file(s) checked, {len(flags)} with at least one non-ok metric:")
+            add_flags(flags)
+            for metric_key, label, _column, worse_is_high in FIB_METRICS:
+                record_metric_points(f"{source}_{metric_key}", f"{label_name} {label}", worse_is_high, metric_points[metric_key])
 
     if args.qsiprep_dir:
         qsiprep_dir = Path(args.qsiprep_dir).resolve()
@@ -475,36 +493,23 @@ def main():
                     writer.writeheader()
                     writer.writerows(rows)
                 print(f"Ingested {len(qc_files)} qsiprep image_qc.csv file(s), {len(rows)} row(s) -> {out_path}")
-                flagged, borderline = summarize_qsiprep(
-                    rows, args.min_dwi_contrast_qsiprep, args.max_mean_fd, args.borderline_margin
-                )
-                print(
-                    f"  {len(rows)} session(s) checked, {len(flagged)} flagged "
-                    f"(t1post_dwi_contrast < {args.min_dwi_contrast_qsiprep} or mean_fd > {args.max_mean_fd})"
-                )
-                for name, contrast, mean_fd in flagged:
-                    print(f"  ⚠️  {name}: t1post_dwi_contrast={contrast:.3f} mean_fd={mean_fd:.3f}")
-                    flagged_names.add(name)
-                    add_flag(name, "qsiprep", f"t1post_dwi_contrast={contrast:.3f} mean_fd={mean_fd:.3f}")
-                if borderline:
-                    print(
-                        f"  {len(borderline)} more session(s) borderline (within {args.borderline_margin} of "
-                        "a cutoff) - not auto-flagged, worth a manual look:"
-                    )
-                    for name, contrast, mean_fd in borderline:
-                        print(f"    • {name}: t1post_dwi_contrast={contrast:.3f} mean_fd={mean_fd:.3f}")
-                        add_flag(
-                            name, "qsiprep",
-                            f"t1post_dwi_contrast={contrast:.3f} mean_fd={mean_fd:.3f} (borderline)",
-                            tier="borderline",
-                        )
+                flags, metric_points = summarize_metrics(rows, "file_name", QSIPREP_METRICS, "qsiprep")
+                print(f"  {len(rows)} session(s) checked, {len(flags)} with at least one non-ok metric:")
+                add_flags(flags)
+                for metric_key, label, _column, worse_is_high in QSIPREP_METRICS:
+                    record_metric_points(metric_key, label, worse_is_high, metric_points[metric_key])
             else:
                 print(f"No desc-image_qc.csv files found under {qsiprep_dir}, skipping qsiprep QC pass")
 
     if qc_flags:
         flags_path = output_dir / "qc_flags.json"
         flags_path.write_text(json.dumps(qc_flags, indent=2, sort_keys=True))
-        print(f"\n{len(qc_flags)} subject/session(s) with at least one flag or borderline note -> {flags_path}")
+        print(f"\n{len(qc_flags)} subject/session(s) with at least one non-ok metric -> {flags_path}")
+
+    if qc_metrics:
+        metrics_path = output_dir / "qc_metrics.json"
+        metrics_path.write_text(json.dumps(qc_metrics, indent=2, sort_keys=True))
+        print(f"Full per-metric distribution ({len(qc_metrics)} metric(s)) -> {metrics_path}")
 
     if flagged_names:
         subjects = sorted({
@@ -515,15 +520,15 @@ def main():
         if subjects:
             out_path = Path(args.flagged_subjects_out).resolve() if args.flagged_subjects_out else output_dir / "flagged_subjects.txt"
             out_path.write_text(",".join(subjects) + "\n")
-            print(f"\n{len(subjects)} subject(s) flagged across all passes -> {out_path}")
+            print(f"\n{len(subjects)} subject(s) severe/moderate across all passes -> {out_path}")
             print(f"Rerun just these with e.g.:")
             print(f"  python scripts/pipeline/dsi_studio_pipeline.py ... --subject {','.join(subjects)} --force fib")
             print(
-                "Note: numeric QC thresholds don't catch every visually-obvious distortion (some "
-                "flagged-by-eye subjects sit right at the cohort average on Coherence/R2) - also spot-check "
-                "flagged and borderline subjects with the thumbnail/viewer tools in scripts/visualization/, "
-                "and check whether the same subject/session looks off in qsiprep's own output (registration/"
-                "normalization QC) since that's a common upstream source of this kind of distortion."
+                "Note: percentile-based severity is relative to *this* cohort - if every subject in a run "
+                "shares the same problem, none of them will stand out as severe. Also spot-check with the "
+                "thumbnail gallery and the QC dashboard's scatter/box plots, and check whether the same "
+                "subject/session looks off in qsiprep's own output (registration/normalization QC) since "
+                "that's a common upstream source of this kind of distortion."
             )
 
 

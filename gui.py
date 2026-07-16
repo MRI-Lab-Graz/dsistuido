@@ -167,6 +167,50 @@ def _clear_server_state_if_owned(owner_pid: int):
             pass
 
 
+def _kill_existing_instance(timeout: float = 5.0) -> bool:
+    """Stop whatever process the saved server state points at, so --restart
+    actually replaces it on the same port instead of --new-instance's
+    behavior of leaving it running and silently binding a different port
+    (find_free_port auto-increments) - the two look identical from the
+    terminal, but only one actually picks up new code. Returns True if a live
+    process was found and stopped, False if there was nothing to kill."""
+    state = _load_server_state()
+    pid = int(state.get("pid", -1)) if state else -1
+    if not _is_process_running(pid):
+        if state and SERVER_STATE_FILE.exists():
+            try:
+                SERVER_STATE_FILE.unlink()
+            except OSError:
+                pass
+        return False
+
+    logger.info(f"Stopping existing Web UI instance (pid {pid}) before starting a fresh one...")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _is_process_running(pid):
+            break
+        time.sleep(0.2)
+    else:
+        if _is_process_running(pid):
+            logger.warning(f"pid {pid} did not exit after {timeout}s, sending SIGKILL")
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            time.sleep(0.5)
+
+    if SERVER_STATE_FILE.exists():
+        try:
+            SERVER_STATE_FILE.unlink()
+        except OSError:
+            pass
+    return True
+
+
 def _open_browser(url: str):
     """Open browser best-effort without failing server startup."""
     try:
@@ -476,14 +520,8 @@ def build_qa_command(payload: Dict) -> List[str]:
         "output_dir": "--output_dir",
         "dsi_studio_cmd": "--dsi_studio_cmd",
         "apptainer_image": "--apptainer_image",
-        "min_dwi_contrast": "--min_dwi_contrast",
-        "min_coherence": "--min_coherence",
-        "min_r2": "--min_r2",
-        "borderline_margin": "--borderline_margin",
         "flagged_subjects_out": "--flagged_subjects_out",
         "qsiprep_dir": "--qsiprep_dir",
-        "min_dwi_contrast_qsiprep": "--min_dwi_contrast_qsiprep",
-        "max_mean_fd": "--max_mean_fd",
     }
     for field, flag in optional_args.items():
         value = payload.get(field)
@@ -629,6 +667,11 @@ def connectivity_settings_page():
 @app.route("/viewer")
 def viewer_page():
     return render_template("viewer.html", active_page="viewer")
+
+
+@app.route("/qc-dashboard")
+def qc_dashboard_page():
+    return render_template("qc_dashboard.html", active_page="pipeline")
 
 
 @app.route("/api/project/create", methods=["POST"])
@@ -892,6 +935,27 @@ def api_qc_thumbnail_file():
     if target.parent != thumbnails_dir.resolve() or not target.is_file():
         return _json_error("Thumbnail not found", 404)
     return send_file(target, mimetype="image/png")
+
+
+@app.route("/api/qc/metrics", methods=["GET"])
+def api_qc_metrics():
+    """Serve <output_dir>/reports/qc_metrics.json (written by run_qc.py) for
+    the QC dashboard's group scatter/box plots - one metric's full cohort
+    distribution per entry, every session that has a value regardless of
+    severity tier (unlike qc_flags.json, which only carries non-"ok" ones).
+    """
+    output_dir_value = (request.args.get("output_dir") or "").strip()
+    if not output_dir_value:
+        return _json_error("Missing output_dir", 400)
+    output_dir = _resolve_input_path(output_dir_value)
+    metrics_path = output_dir / "reports" / "qc_metrics.json"
+    if not metrics_path.is_file():
+        return jsonify({"ok": True, "metrics": {}})
+    try:
+        metrics = json.loads(metrics_path.read_text())
+    except (OSError, ValueError):
+        return _json_error("Could not parse qc_metrics.json", 500)
+    return jsonify({"ok": True, "metrics": metrics})
 
 
 @app.route("/api/run/connectometry", methods=["POST"])
@@ -1281,12 +1345,28 @@ def api_bids_entities():
 def main():
     import argparse
 
+    # Plain `./gui.py` with no flags now defaults to --no-open --restart: no
+    # browser popup (this is normally left running in a terminal/tmux, not
+    # launched fresh each time) and always replace whatever instance was
+    # previously tracked so code changes actually take effect. Without this,
+    # re-running the script after an edit silently did nothing useful - the
+    # old process kept serving stale code (plain reuse) or a second instance
+    # started on a different auto-incremented port while the stale one kept
+    # running on the original port (--new-instance) - either way the browser
+    # tab pointed at the original port never saw the update. --open and
+    # --no-restart opt back into the old behaviors if ever wanted.
     parser = argparse.ArgumentParser(description="Flask + Waitress UI for DSI Studio helpers")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=5000, help="Preferred port (auto-increment if busy)")
-    parser.add_argument("--no-open", action="store_true", help="Do not auto-open the UI URL in a browser")
-    parser.add_argument("--new-instance", action="store_true", help="Start a new server even if an existing instance is already running")
+    parser.add_argument("--open", action="store_true", help="Auto-open the UI URL in a browser after starting (default: off)")
+    parser.add_argument("--no-open", action="store_true", help="No-op: browser auto-open is off by default now. Kept only so old invocations don't error.")
+    parser.add_argument("--new-instance", action="store_true", help="Start a new server even if an existing instance is already running (does NOT stop it - if the preferred port is taken, this binds a different one instead, so the old instance keeps serving its old code). Rarely what you want - see --restart.")
+    parser.add_argument("--restart", action=argparse.BooleanOptionalAction, default=True, help="Stop any existing tracked instance (from a previous run) and start fresh on the same port, so code changes actually take effect (default: on). Pass --no-restart to instead reuse a healthy existing instance if one is running.")
     args = parser.parse_args()
+
+    if args.restart:
+        _kill_existing_instance()
+        args.new_instance = True
 
     # Reuse an existing running instance by default to avoid repeated port/open prompts.
     if not args.new_instance:
@@ -1306,7 +1386,7 @@ def main():
             url = state.get("url") or _build_ui_url(saved_host, saved_port)
             if _url_reachable(url) and _url_has_expected_ui(url):
                 logger.info(f"Web UI already running at {url} (pid {state.get('pid')})")
-                if not args.no_open:
+                if args.open:
                     _open_browser(url)
                 return
             logger.warning("Saved Web UI instance did not match expected app signature; starting a fresh instance.")
@@ -1328,7 +1408,7 @@ def main():
     logger.info("Starting DSI Studio Web UI...")
     logger.info(f"Web UI available at: {url}")
     logger.info("Press Ctrl+C to stop")
-    if not args.no_open:
+    if args.open:
         # Open after startup begins; non-blocking and best-effort.
         threading.Timer(1.2, _open_browser, args=[url]).start()
 

@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}DSI Studio Console - QC Dashboard{% endblock %}
+
+{% block content %}
+<div class="card feature-card border-info mb-3">
+    <div class="card-body py-3">
+        <div class="d-flex align-items-start">
+            <i class="fas fa-circle-info text-info me-2 mt-1"></i>
+            <div>
+                <strong>Quick Guide</strong>
+                <div class="text-muted small mt-1">
+                    One box+strip plot per QC metric (DSI Studio SRC/FIB + QSIPrep), every subject/session as a point - the same idea as MRIQC's group report. Severity (severe/moderate/mild) is graded against this cohort's own distribution, so a project with a systemic problem still shows its real spread here even if nothing stands out as an outlier in the per-file flags. Hover a point for its subject/session and exact value. Run "QA / QC" on the Pipeline page first (with a QSIPrep directory set, to include those metrics too).
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card feature-card mb-3">
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-8">
+                <label class="form-label">Output directory</label>
+                <div class="input-group path-picker-group" data-picker-mode="dir">
+                    <input class="form-control" id="qcd_output" />
+                    <button class="btn btn-outline-secondary open-path-picker" type="button">Browse</button>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <button class="btn btn-success w-100" type="button" id="qcdRefreshBtn"><i class="fas fa-rotate me-1"></i>Load metrics</button>
+            </div>
+        </div>
+        <div class="mt-3 small text-muted" id="qcdStatus">Set an output directory and click "Load metrics".</div>
+    </div>
+</div>
+
+<div id="qcdPlots"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script>
+(function() {
+    const TIER_COLOR = { severe: '#dc3545', moderate: '#fd7e14', mild: '#ffc107', ok: '#0d6efd' };
+    const statusEl = document.getElementById('qcdStatus');
+    const plotsEl = document.getElementById('qcdPlots');
+
+    async function loadMetrics() {
+        const outputDir = document.getElementById('qcd_output').value.trim();
+        if (!outputDir) {
+            window.dsiUi.notify('Set an output directory first.', true);
+            return;
+        }
+        statusEl.textContent = 'Loading...';
+        plotsEl.innerHTML = '';
+        try {
+            const res = await window.dsiUi.fetchJson(
+                `/api/qc/metrics?output_dir=${encodeURIComponent(outputDir)}`, undefined, 'GET'
+            );
+            const metrics = res.metrics || {};
+            const keys = Object.keys(metrics);
+            if (!keys.length) {
+                statusEl.textContent = 'No qc_metrics.json found yet - run "QA / QC" on the Pipeline page first.';
+                return;
+            }
+            keys.sort();
+            keys.forEach(key => renderMetric(key, metrics[key]));
+            statusEl.textContent = `${keys.length} metric(s) loaded.`;
+        } catch (error) {
+            statusEl.textContent = error.message;
+        }
+    }
+
+    function renderMetric(key, metric) {
+        const entries = Object.entries(metric.values || {});
+        if (!entries.length) return;
+
+        const card = document.createElement('div');
+        card.className = 'card feature-card mb-3';
+        const header = document.createElement('div');
+        header.className = 'card-header';
+        const n = entries.length;
+        const tierCounts = { severe: 0, moderate: 0, mild: 0, ok: 0 };
+        entries.forEach(([, v]) => { tierCounts[v.tier] = (tierCounts[v.tier] || 0) + 1; });
+        header.innerHTML = `<i class="fas fa-chart-simple me-2 text-info"></i>${metric.label || key} `
+            + `<span class="text-muted small">(n=${n}${metric.worse_is_high ? ', higher = worse' : ', lower = worse'})</span> `
+            + (tierCounts.severe ? `<span class="badge bg-danger ms-1">${tierCounts.severe} severe</span>` : '')
+            + (tierCounts.moderate ? `<span class="badge bg-warning text-dark ms-1">${tierCounts.moderate} moderate</span>` : '')
+            + (tierCounts.mild ? `<span class="badge bg-secondary ms-1">${tierCounts.mild} mild</span>` : '');
+        const body = document.createElement('div');
+        body.className = 'card-body';
+        const plotDiv = document.createElement('div');
+        plotDiv.style.width = '100%';
+        plotDiv.style.height = '260px';
+        body.appendChild(plotDiv);
+        card.appendChild(header);
+        card.appendChild(body);
+        plotsEl.appendChild(card);
+
+        const y = entries.map(([, v]) => v.value);
+        const text = entries.map(([name, v]) => `${name}: ${v.value.toFixed(3)} (${v.tier})`);
+        const colors = entries.map(([, v]) => TIER_COLOR[v.tier] || TIER_COLOR.ok);
+        // jitter x so points don't overlap in a single vertical line (strip plot)
+        const x = entries.map(() => (Math.random() - 0.5) * 0.5);
+
+        const boxTrace = {
+            y, x: entries.map(() => 0),
+            type: 'box', name: '', boxpoints: false,
+            marker: { color: '#adb5bd' }, line: { color: '#6c757d' },
+            fillcolor: 'rgba(173,181,189,0.15)',
+            hoverinfo: 'skip',
+        };
+        const scatterTrace = {
+            y, x, text,
+            type: 'scatter', mode: 'markers', name: '',
+            marker: { color: colors, size: 7, opacity: 0.8, line: { width: 0.5, color: '#333' } },
+            hovertemplate: '%{text}<extra></extra>',
+        };
+        Plotly.newPlot(plotDiv, [boxTrace, scatterTrace], {
+            margin: { l: 50, r: 20, t: 10, b: 20 },
+            showlegend: false,
+            xaxis: { range: [-0.6, 0.6], visible: false },
+            yaxis: { zeroline: false },
+            autosize: true,
+        }, { responsive: true, displayModeBar: false });
+    }
+
+    document.getElementById('qcdRefreshBtn').addEventListener('click', loadMetrics);
+
+    const p = window.dsiUi.getCurrentProject();
+    if (p && p.output_dir) {
+        document.getElementById('qcd_output').value = p.output_dir;
+        loadMetrics();
+    }
+})();
+</script>
+{% endblock %}
