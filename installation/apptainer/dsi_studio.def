@@ -1,12 +1,20 @@
 Bootstrap: docker
 From: ubuntu:22.04
 
+%arguments
+    ASSET_URL=https://github.com/frankyeh/DSI-Studio/releases/download/2025.04.16/dsi_studio_ubuntu2204.zip
+
 %labels
     maintainer dsistuido project
     source https://github.com/frankyeh/DSI-Studio
     note Wraps the official prebuilt Linux release asset (CUDA-enabled), not the
     note CPU-only dsistudio/dsistudio Docker Hub image. Base OS matches the host's
     note glibc so --nv/--nvccli GPU passthrough works without symbol mismatches.
+    note ASSET_URL is normally resolved by build_image.sh (walks GitHub releases
+    note newest-first for the one that currently ships the Linux CUDA zip, since
+    note release tags don't reliably ship it -- e.g. 2026.7.25 is Windows-only)
+    note and passed via --build-arg; the default above is only a manual-build
+    note fallback and will go stale.
 
 %post
     set -eu
@@ -30,10 +38,7 @@ From: ubuntu:22.04
         qt6-image-formats-plugins qt6-qpa-plugins
     rm -rf /var/lib/apt/lists/*
 
-    # Always fetches whatever GitHub currently serves as the latest release asset,
-    # so rebuilding this image later picks up the maintainer's newest build.
-    ASSET_URL="https://github.com/frankyeh/DSI-Studio/releases/latest/download/dsi_studio_ubuntu2204.zip"
-    curl -fL --retry 5 --retry-delay 2 -o /tmp/dsi_studio.zip "$ASSET_URL"
+    curl -fL --retry 5 --retry-delay 2 -o /tmp/dsi_studio.zip "{{ ASSET_URL }}"
     mkdir -p /opt/dsi-studio
     unzip -q /tmp/dsi_studio.zip -d /opt/dsi-studio_extracted
     # The zip wraps everything in a single top-level dir; flatten it.
