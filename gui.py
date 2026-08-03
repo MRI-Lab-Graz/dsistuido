@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from flask import Flask, jsonify, render_template, request, redirect, url_for, send_file
 from waitress import serve
@@ -87,6 +87,14 @@ logger = logging.getLogger("webui")
 jobs_lock = threading.Lock()
 jobs: Dict[str, Dict] = {}
 job_processes: Dict[str, subprocess.Popen] = {}
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# ntfy.sh push notification config, same pattern as build_apptainer's
+# notify_ntfy.sh: a gitignored, machine-local env file holding the topic
+# (an unauthenticated shared secret) - see scripts/web_settings/ntfy.env.example.
+# Absent by default, so notifications are opt-in and silently skipped until set up.
+NTFY_ENV_FILE = SETTINGS_DIR / "ntfy.env"
 
 
 def _is_process_running(pid: int) -> bool:
@@ -373,6 +381,88 @@ def _job_env() -> Dict[str, str]:
     return env
 
 
+def _load_ntfy_config() -> Optional[Dict[str, str]]:
+    """Read NTFY_TOPIC (required) / NTFY_SERVER (optional) from ntfy.env,
+    the same KEY=VALUE format as build_apptainer's config/ntfy.env. Returns
+    None if the file doesn't exist yet or has no topic set, so callers can
+    treat "not configured" as a silent no-op rather than an error.
+    """
+    if not NTFY_ENV_FILE.is_file():
+        return None
+    config: Dict[str, str] = {}
+    for line in NTFY_ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        config[key.strip()] = value.strip()
+    topic = config.get("NTFY_TOPIC")
+    if not topic:
+        return None
+    server = (config.get("NTFY_SERVER") or "https://ntfy.sh").rstrip("/")
+    return {"topic": topic, "server": server}
+
+
+def _send_ntfy(title: str, message: str, priority: str = "default") -> None:
+    """Best-effort ntfy.sh push notification. Never raises - a notification
+    failure shouldn't affect job status or the response to the UI.
+    """
+    config = _load_ntfy_config()
+    if not config:
+        return
+    url = f"{config['server']}/{config['topic']}"
+    req = Request(
+        url,
+        data=message.encode("utf-8"),
+        method="POST",
+        headers={"Title": title, "Priority": priority},
+    )
+    try:
+        urlopen(req, timeout=10)
+    except (URLError, OSError) as exc:
+        logger.warning(f"ntfy notification failed: {exc}")
+
+
+def _tail_log_text(log_file: Path, max_lines: int = 20) -> str:
+    if not log_file.is_file():
+        return ""
+    try:
+        text = log_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    text = _ANSI_RE.sub("", text)
+    lines = text.splitlines()[-max_lines:]
+    return "\n".join(lines)
+
+
+def _notify_job_finished(job: Dict) -> None:
+    """Push an ntfy notification for a finished job. Only called for jobs
+    launched with notify=True (see launch_job) - i.e. "full" pipeline runs
+    (not --dry_run/--pilot) and "full" connectometry runs (not
+    --dry-run/--test), per the same "only tell me about the real thing"
+    rule build_apptainer's autobuild notifications follow.
+    """
+    status = job.get("status", "unknown")
+    duration = job.get("duration_sec")
+    duration_str = f"{duration:.0f}s" if isinstance(duration, (int, float)) else "?"
+    lines = [
+        f"Host: {socket.gethostname()}",
+        f"Status: {status} (exit {job.get('return_code')})",
+        f"Duration: {duration_str}",
+    ]
+    if job.get("label"):
+        lines.append(f"Target: {job['label']}")
+    if status != "completed":
+        tail = _tail_log_text(Path(job["log_file"]))
+        if tail:
+            lines.append("")
+            lines.append("Last log lines:")
+            lines.append(tail)
+    title = f"DSI Studio {job.get('type')}: {status}"
+    priority = "default" if status == "completed" else "high"
+    _send_ntfy(title, "\n".join(lines), priority=priority)
+
+
 def _run_job(job_id: str, cmd: List[str], cwd: Optional[Path]):
     start_ts = time.time()
     log_file = Path(jobs[job_id]["log_file"])
@@ -405,6 +495,15 @@ def _run_job(job_id: str, cmd: List[str], cwd: Optional[Path]):
         jobs[job_id]["return_code"] = rc
         jobs[job_id]["ended_at"] = datetime.now(timezone.utc).isoformat()
         jobs[job_id]["duration_sec"] = round(end_ts - start_ts, 2)
+        job_snapshot = dict(jobs[job_id])
+
+    # Manual stops are excluded - the user is already at the controls when
+    # they hit "stop job", so a push notification would be noise.
+    if job_snapshot.get("notify") and job_snapshot["status"] in ("completed", "failed"):
+        try:
+            _notify_job_finished(job_snapshot)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"ntfy notification failed: {exc}")
 
 
 def _resolve_log_dir(project_root_value: Optional[str]) -> Path:
@@ -418,8 +517,23 @@ def _resolve_log_dir(project_root_value: Optional[str]) -> Path:
     return LOG_DIR
 
 
-def launch_job(cmd: List[str], job_type: str, cwd: Optional[Path] = None, project_root: Optional[str] = None) -> Dict[str, str]:
-    """Launch a subprocess in a background thread and track it."""
+def launch_job(
+    cmd: List[str],
+    job_type: str,
+    cwd: Optional[Path] = None,
+    project_root: Optional[str] = None,
+    notify: bool = False,
+    label: Optional[str] = None,
+) -> Dict[str, str]:
+    """Launch a subprocess in a background thread and track it.
+
+    notify: send an ntfy push notification (see _notify_job_finished) when
+    this job finishes. Callers set this only for "full" runs - see the
+    api_run_pipeline/api_run_connectometry routes for the dry_run/pilot/test
+    checks that decide it.
+    label: short human-readable target (e.g. output_dir or config path) to
+    include in that notification.
+    """
     # Use UUID-based job IDs to avoid collisions for rapid consecutive runs.
     job_id = uuid.uuid4().hex
     log_dir = _resolve_log_dir(project_root)
@@ -434,6 +548,8 @@ def launch_job(cmd: List[str], job_type: str, cwd: Optional[Path] = None, projec
             "log_file": str(log_file),
             "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(),
+            "notify": notify,
+            "label": label,
         }
     thread = threading.Thread(target=_run_job, args=(job_id, cmd, cwd), daemon=True)
     thread.start()
@@ -825,7 +941,14 @@ def api_run_pipeline():
     try:
         payload = _get_json_payload()
         cmd = build_pipeline_command(payload)
-        job = launch_job(cmd, job_type="pipeline", cwd=REPO_DIR, project_root=payload.get("project_root"))
+        # Only notify for full runs - --dry_run and --pilot are for checking
+        # a command/single subject before committing to the real thing, not
+        # something worth an unattended push notification.
+        is_full_run = not payload.get("dry_run") and not payload.get("pilot")
+        job = launch_job(
+            cmd, job_type="pipeline", cwd=REPO_DIR, project_root=payload.get("project_root"),
+            notify=is_full_run, label=payload.get("output_dir"),
+        )
         return jsonify({"ok": True, "job": job, "cmd": cmd})
     except ValueError as exc:
         return _json_error(str(exc), 400)
@@ -963,7 +1086,14 @@ def api_run_connectometry():
     try:
         payload = _get_json_payload()
         cmd = build_connectometry_command(payload)
-        job = launch_job(cmd, job_type="connectometry", cwd=REPO_DIR, project_root=payload.get("project_root"))
+        # Same "only the real thing" rule as the pipeline: --dry-run and
+        # --test (single test_run config) are for checking the batch before
+        # committing to it, not worth a push notification.
+        is_full_run = not payload.get("dry_run") and not payload.get("test")
+        job = launch_job(
+            cmd, job_type="connectometry", cwd=REPO_DIR, project_root=payload.get("project_root"),
+            notify=is_full_run, label=payload.get("config"),
+        )
         return jsonify({"ok": True, "job": job, "cmd": cmd})
     except ValueError as exc:
         return _json_error(str(exc), 400)
@@ -988,9 +1118,6 @@ def api_run_viewer():
 def api_jobs():
     with jobs_lock:
         return jsonify(list(jobs.values()))
-
-
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @app.route("/api/jobs/<job_id>/log", methods=["GET"])

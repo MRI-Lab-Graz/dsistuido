@@ -67,7 +67,7 @@
                 <label class="form-label">Method</label>
                 <select class="form-select" id="p_method">
                     <option value="4">4 (GQI)</option>
-                    <option value="7">7 (QSDR)</option>
+                    <option value="7" selected>7 (QSDR)</option>
                 </select>
             </div>
             <div class="col-md-4">
@@ -493,6 +493,8 @@
     }
 
     updateProjectDisplays();
+    const draft = window.dsiUi.bindFormDraft('pipeline_runner', buildPayload);
+    if (draft) applyPayload(draft);
     loadPresetList();
 })();
 
@@ -589,6 +591,8 @@
     document.getElementById('loadQaPresetBtn').addEventListener('click', loadSelectedPreset);
     document.getElementById('qaPresetSelect').addEventListener('change', loadSelectedPreset);
 
+    const qaDraft = window.dsiUi.bindFormDraft('pipeline_qa', buildPayload);
+    if (qaDraft) applyPayload(qaDraft);
     loadPresetList();
 
     // --- Visual QC: openable/closable slice-thumbnail gallery ---

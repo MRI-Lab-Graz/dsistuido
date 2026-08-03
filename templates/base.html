@@ -298,6 +298,7 @@
     const jobLogOutput = document.getElementById('jobLogOutput');
     const refreshJobsBtn = document.getElementById('refreshJobsBtn');
     const PROJECT_KEY = 'dsi_web_current_project';
+    const DRAFT_PREFIX = 'dsi_web_draft:';
 
     async function fetchJson(url, payload, method = 'POST', timeoutMs = null) {
         const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -359,6 +360,33 @@
     function setCurrentProject(project) {
         localStorage.setItem(PROJECT_KEY, JSON.stringify(project || {}));
         updateCurrentProjectUI();
+    }
+
+    function loadDraft(key) {
+        const raw = localStorage.getItem(DRAFT_PREFIX + key);
+        if (!raw) return null;
+        try {
+            return JSON.parse(raw);
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function saveDraft(key, data) {
+        localStorage.setItem(DRAFT_PREFIX + key, JSON.stringify(data || {}));
+    }
+
+    // Keeps an in-progress form's unsaved values across page navigation
+    // (switching tabs/pages used to reset every field, losing whatever
+    // hadn't been explicitly saved as a preset/project yet). Call once per
+    // page with a page-unique key and the page's own buildPayload()-style
+    // function; wires autosave on every input/change and returns whatever
+    // was last saved so the caller can apply it back onto the form.
+    function bindFormDraft(key, buildFn) {
+        const save = () => saveDraft(key, buildFn());
+        document.addEventListener('input', save);
+        document.addEventListener('change', save);
+        return loadDraft(key);
     }
 
     function updateCurrentProjectUI() {
@@ -668,6 +696,7 @@
         getCurrentProject,
         setCurrentProject,
         updateCurrentProjectUI,
+        bindFormDraft,
     };
 })();
 </script>

@@ -348,7 +348,12 @@
     // Intentionally left blank on load, even if a current project is already
     // set (e.g. from a prior session) - this page is for starting a *new*
     // project. Use "Load Current Project" or pick one from the list to edit
-    // an existing one.
+    // an existing one. A draft of whatever's been typed into *this* form
+    // (distinct from the current/loaded project) still survives switching
+    // to another page and back, so half-filled-in new-project fields aren't
+    // lost just for checking something on Pipeline/Connectometry.
+    const draft = window.dsiUi.bindFormDraft('new_project_form', collect);
+    if (draft) apply(draft);
     loadProjectsList();
 })();
 

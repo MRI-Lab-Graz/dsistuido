@@ -167,8 +167,13 @@
     document.getElementById('saveConnectometryPresetBtn').addEventListener('click', savePreset);
     document.getElementById('loadConnectometryPresetBtn').addEventListener('click', loadSelectedPreset);
 
-    const p = window.dsiUi.getCurrentProject();
-    if (p && p.connectivity_config) document.getElementById('c_config').value = p.connectivity_config;
+    const draft = window.dsiUi.bindFormDraft('connectometry', buildPayload);
+    if (draft) {
+        applyPayload(draft);
+    } else {
+        const p = window.dsiUi.getCurrentProject();
+        if (p && p.connectivity_config) document.getElementById('c_config').value = p.connectivity_config;
+    }
 
     loadPresetList();
 })();

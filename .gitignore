@@ -112,4 +112,5 @@ interactive_viewer.html
 crea_qa_fa.html
 scripts/web_settings/pipeline*.json
 scripts/web_settings/projects_registry.json
+scripts/web_settings/ntfy.env
 .gitignore
