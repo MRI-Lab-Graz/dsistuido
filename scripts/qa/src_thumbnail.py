@@ -60,6 +60,27 @@ def _load_b0_slice(src_path: Path, slice_frac: float = 0.5) -> Optional[np.ndarr
         return None
 
 
+def _otsu_threshold(arr: np.ndarray, bins: int = 256) -> float:
+    """The intensity threshold that best separates two classes by maximizing
+    between-class variance (Otsu's method) - used here to separate background
+    air from head/brain tissue in a b0 slice, since SRC files carry no stored
+    brain mask at all. Plain numpy, no extra dependency (e.g. skimage)."""
+    hist, edges = np.histogram(arr, bins=bins)
+    hist = hist.astype(np.float64)
+    total = hist.sum()
+    if total == 0:
+        return float(arr.min())
+    centers = (edges[:-1] + edges[1:]) / 2
+    weight_bg = np.cumsum(hist)
+    weight_fg = total - weight_bg
+    with np.errstate(all="ignore"):
+        mean_bg = np.cumsum(hist * centers) / weight_bg
+        mean_fg = np.cumsum((hist * centers)[::-1])[::-1] / weight_fg
+        between_class_var = weight_bg * weight_fg * (mean_bg - mean_fg) ** 2
+    between_class_var = np.nan_to_num(between_class_var, nan=-1.0, posinf=-1.0, neginf=-1.0)
+    return float(centers[np.argmax(between_class_var)])
+
+
 def render_src_thumbnail(src_path: Path, out_png: Path, slice_frac: float = 0.5) -> bool:
     """Write a normalized, upright PNG of one axial slice to out_png. Returns
     whether it succeeded."""
@@ -67,8 +88,18 @@ def render_src_thumbnail(src_path: Path, out_png: Path, slice_frac: float = 0.5)
     if arr is None:
         return False
 
-    span = arr.max() - arr.min()
-    normalized = ((arr - arr.min()) / span * 255) if span > 0 else np.zeros_like(arr)
+    # Contrast-stretch using only head/brain tissue intensities, not the
+    # whole slice - background air voxels (roughly half a typical axial
+    # slice, near-zero in a b0 volume) would otherwise dominate the min/max
+    # range and wash out the real brain contrast a QC reviewer actually
+    # needs, especially alongside a few bright non-brain outlier voxels.
+    # SRC files carry no stored mask, so the foreground/background split is
+    # estimated with Otsu's method rather than a true anatomical mask.
+    threshold = _otsu_threshold(arr)
+    foreground = arr[arr > threshold]
+    lo, hi = (foreground.min(), foreground.max()) if foreground.size > 0 else (arr.min(), arr.max())
+    span = hi - lo
+    normalized = np.clip((arr - lo) / span * 255, 0, 255) if span > 0 else np.zeros_like(arr)
     img = Image.fromarray(normalized.astype(np.uint8))
     # image0 as stored reads sideways and upside-down relative to a
     # conventional radiological axial view - this flip+rotate was checked

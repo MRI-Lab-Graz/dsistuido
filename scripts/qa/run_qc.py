@@ -9,12 +9,15 @@ instead of source_dir itself -- so pointing this at a pipeline's top-level
 output_dir just works. Otherwise source_dir is searched directly (e.g. pointing
 straight at .../src).
 
-FIB is checked in two separate passes, since the pipeline's DataLad mode writes
-GQI reconstructions only into each subject's own sub-*/fib/ folder while QSDR
-reconstructions go into the flat fib/ folder -- the two are not duplicates of
-each other, so a single flat-folder pass silently misses one of them:
-    - fz_qc_qsdr.tsv: the flat fib/ folder (or source_dir if pointed there directly)
-    - fz_qc_gqi.tsv:  every sub-*/fib/*.fz under source_dir
+FIB is checked in separate passes by reconstruction method (GQI vs QSDR),
+identified from the filename suffix dsi_studio_pipeline.py's reconstruct_fib()
+always writes (.odf.gqi.fz / .odf.qsdr.fz) -- both methods land in the same
+place (each subject's own sub-*/fib/ folder, or a flat fib/ folder if pointed
+at one directly), so splitting by folder location instead of filename would
+either miss files or mislabel one method's files as the other's:
+    - fz_qc_qsdr.tsv: every *.qsdr.fz under source_dir (flat fib/ and sub-*/fib/)
+    - fz_qc_gqi.tsv:  every *.gqi.fz under source_dir (flat fib/ and sub-*/fib/)
+    - fz_qc_other.tsv: any other *.fz under source_dir (unrecognized method suffix)
 
 Wraps:
     dsi_studio --action=qc --source=<file1,file2,...> --check_btable=1 --output=<sz_qc.tsv>
@@ -39,16 +42,25 @@ qsiprep's t1post_dwi_contrast and mean_fd both flagged it clearly.
 
 Severity, not a single pass/fail: every numeric metric (DWI contrast, bad
 slices, outlier, coherence, R2, qsiprep contrast, mean FD, ...) is graded
-against the *cohort's own distribution* from this same run (see
-metric_severity()) into severe / moderate / mild / ok, rather than one fixed
-absolute cutoff. A fixed cutoff alone either misses real distortion sitting
-just above the line, or - the opposite failure, seen on a real project -
-floods the output with near-identical "flagged" status for a trivially common
-value (e.g. "#bad slices > 0" alone flagged 44% of one real cohort with no way
-to tell a single incidental bad slice from a genuinely severe file) alongside
-the rare, actually-severe cases. Percentile-based severity self-calibrates to
-whatever cohort is actually being checked instead of a number tuned on a
-different project, and gives a graded signal a human can actually triage.
+into severe / moderate / mild / ok (see metric_severity()) rather than one
+fixed absolute cutoff, since a fixed cutoff alone either misses real
+distortion sitting just above the line, or - the opposite failure, seen on a
+real project - floods the output with near-identical "flagged" status for a
+trivially common value (e.g. "#bad slices > 0" alone flagged 44% of one real
+cohort with no way to tell a single incidental bad slice from a genuinely
+severe file) alongside the rare, actually-severe cases.
+
+Graded against a cross-study baseline (mean/std for this metric across every
+project ever checked on this machine, persisted to qc_baseline.json next to
+this script and updated after every run) via a one-sided z-score, once that
+baseline has enough history (MIN_BASELINE_N). This is deliberately not
+graded against just this run's own cohort: a same-run percentile always
+flags roughly its own worst quarter as mild-or-worse no matter how healthy
+the whole batch is (25% of anything is 25% of it), and a problem shared by
+every file in one run can never stand out against itself - but it will stand
+out against other studies' normal range. Falls back to this run's in-cohort
+percentile (the original design) only when the baseline doesn't have enough
+history yet, e.g. the first study or two ever checked.
 
 Two consolidated outputs feed downstream tools (e.g. the web GUI's thumbnail
 gallery and QC dashboard) instead of requiring a separate look at raw tsv/csv
@@ -101,13 +113,41 @@ DEFAULT_APPTAINER_IMAGES_DIR = Path("/data/local/software/apptainer_images")
 
 SRC_PATTERNS = ["*.sz", "*.src.gz"]
 FIB_PATTERNS = ["*.fz"]
+# Method-specific suffixes dsi_studio_pipeline.py's reconstruct_fib() writes
+# (see its method_suffixes dict) -- used to split a FIB pass by reconstruction
+# method regardless of which folder the file physically landed in.
+FIB_METHOD_PATTERNS = {
+    "QSDR": ["*.qsdr.fz"],
+    "GQI": ["*.gqi.fz"],
+}
 QSIPREP_QC_PATTERNS = ["sub-*/dwi/*_desc-image_qc.csv", "sub-*/ses-*/dwi/*_desc-image_qc.csv"]
 
 # Severity bands, as the worst fraction of the cohort a value needs to sit in
 # to earn each tier - e.g. "severe" means only ~2% of this same run's files
 # are this bad or worse. Ordered worst-first; the first band a value's
-# worst_fraction is under wins. Same bands apply to every metric.
+# worst_fraction is under wins. Same bands apply to every metric. Only used
+# as a fallback when a cross-study baseline isn't available yet - see
+# BASELINE_PATH/SD_BANDS below.
 SEVERITY_BANDS = (("severe", 0.02), ("moderate", 0.10), ("mild", 0.25))
+
+# Every project ever checked shares this one baseline file (mean/std per
+# metric, updated after every run) so a value is graded against how every
+# study on this machine has looked historically, not just the handful of
+# hundred files in *this* run. This matters two ways a same-run percentile
+# can't: (1) a run's own worst quartile is *always* flagged mild-or-worse no
+# matter how healthy the whole batch is (25% of anything is 25% of it), and
+# (2) a problem shared by every file in one run (e.g. a bad upstream step)
+# never stands out against itself - but it will stand out against other
+# studies' normal range.
+BASELINE_PATH = Path(__file__).resolve().parent / "qc_baseline.json"
+# Standard-deviation bands (one-sided, in the "worse" direction only) - the
+# usual 1/2/3-sigma rule. Ordered worst-first, same shape as SEVERITY_BANDS.
+SD_BANDS = (("severe", 3.0), ("moderate", 2.0), ("mild", 1.0))
+# Below this many historical values, a mean/std estimate is too noisy to
+# grade against - fall back to this run's own in-cohort percentile instead
+# (see metric_severity). A single run already has hundreds of files, so this
+# is really just a floor for the very first study or two ever checked.
+MIN_BASELINE_N = 20
 
 _SUB_SES_RE = re.compile(r"(sub-[A-Za-z0-9]+)(?:_(ses-[A-Za-z0-9]+))?")
 
@@ -146,10 +186,65 @@ def severity_tier(frac: float) -> str:
     return "ok"
 
 
-def metric_severity(values, value: float, worse_is_high: bool):
-    """Returns (tier, worst_fraction) for one value against its cohort."""
+def load_baseline() -> dict:
+    if BASELINE_PATH.exists():
+        try:
+            return json.loads(BASELINE_PATH.read_text())
+        except (OSError, ValueError) as e:
+            print(f"WARNING: could not read {BASELINE_PATH}: {e}; starting a fresh baseline")
+    return {}
+
+
+def save_baseline(baseline: dict) -> None:
+    BASELINE_PATH.write_text(json.dumps(baseline, indent=2, sort_keys=True))
+
+
+def update_baseline(baseline: dict, metric_key: str, values) -> None:
+    """Merge this run's values into metric_key's running (n, mean, m2) via
+    Welford's online algorithm, so the baseline file only ever holds three
+    numbers per metric no matter how many studies/files have contributed to
+    it - no need to retain every historical value just to keep growing the
+    baseline."""
+    if not values:
+        return
+    entry = baseline.setdefault(metric_key, {"n": 0, "mean": 0.0, "m2": 0.0})
+    n, mean, m2 = entry["n"], entry["mean"], entry["m2"]
+    for value in values:
+        n += 1
+        delta = value - mean
+        mean += delta / n
+        m2 += delta * (value - mean)
+    entry["n"], entry["mean"], entry["m2"] = n, mean, m2
+
+
+def baseline_std(entry: dict) -> float:
+    return (entry["m2"] / (entry["n"] - 1)) ** 0.5 if entry.get("n", 0) > 1 else 0.0
+
+
+def sd_tier(z: float) -> str:
+    for tier, cutoff in SD_BANDS:
+        if z >= cutoff:
+            return tier
+    return "ok"
+
+
+def metric_severity(values, value: float, worse_is_high: bool, baseline_entry: Optional[dict] = None):
+    """Returns (tier, detail, method) for one value. Prefers grading against
+    baseline_entry - this metric's historical mean/std across every study
+    ever checked - via a one-sided z-score (detail = z, method = "baseline"),
+    since that's a real population instead of just this run's own few
+    hundred files. Falls back to this run's in-cohort percentile (detail =
+    worst_fraction, method = "cohort") when the baseline doesn't have enough
+    history yet (see MIN_BASELINE_N) - e.g. the first study or two ever
+    checked on this machine."""
+    if baseline_entry and baseline_entry.get("n", 0) >= MIN_BASELINE_N:
+        std = baseline_std(baseline_entry)
+        if std > 0:
+            mean = baseline_entry["mean"]
+            z = (value - mean) / std if worse_is_high else (mean - value) / std
+            return sd_tier(z), z, "baseline"
     frac = worst_fraction(values, value, worse_is_high)
-    return severity_tier(frac), frac
+    return severity_tier(frac), frac, "cohort"
 
 
 _TIER_RANK = {"ok": 0, "mild": 1, "moderate": 2, "severe": 3}
@@ -256,6 +351,16 @@ def find_subject_files(source_dir: Path, subdir_name: str, patterns):
     return sorted({f for p in patterns for f in source_dir.glob(f"sub-*/{subdir_name}/{p}") if f.exists()})
 
 
+def find_method_fib_files(source_dir: Path, fib_dir: Path, patterns):
+    """Every FIB file matching patterns (a method-specific suffix, see
+    FIB_METHOD_PATTERNS) in the flat fib_dir and in every sub-*/fib/ under
+    source_dir. Reconstruction method lives in the filename suffix, not in
+    which of these two locations a file happens to sit in -- both DataLad's
+    per-subject layout and a flat fib/ folder can hold either method, so both
+    locations are always searched together for each method."""
+    return sorted(set(find_files(fib_dir, patterns)) | set(find_subject_files(source_dir, "fib", patterns)))
+
+
 def run_qc(dsi_studio_cmd, source_patterns, output_path: Path, check_btable: bool, file_count: int):
     # dsi_studio does its own wildcard expansion, so keep --source short (a few
     # glob patterns) rather than passing every matched file individually --
@@ -334,14 +439,17 @@ QSIPREP_METRICS = [
 ]
 
 
-def summarize_metrics(rows, name_col, metrics, source, name_prefix=""):
-    """Generic pass: for every metric spec, grade every row's value against
-    the *other rows in this same call* (the cohort for this pass) and return
-    (flags, metric_points).
+def summarize_metrics(rows, name_col, metrics, source, name_prefix="", baseline: Optional[dict] = None, baseline_prefix: str = ""):
+    """Generic pass: for every metric spec, grade every row's value - against
+    the cross-study baseline if it has enough history, else against the
+    *other rows in this same call* (the cohort for this pass) - and return
+    (flags, metric_points). Mutates `baseline` in place, merging this run's
+    values in only *after* grading, so this run is graded against history
+    instead of (partly) against itself.
 
-    flags: list of (name, tier, [(metric_key, value, tier, frac), ...]) for
-    rows with at least one non-"ok" metric - only those make it into
-    qc_flags.json.
+    flags: list of (name, tier, [(metric_key, label, value, tier, detail,
+    method), ...]) for rows with at least one non-"ok" metric - only those
+    make it into qc_flags.json.
 
     metric_points: {metric_key: {name: (value, tier)}} for every row that has
     a numeric value for that metric, regardless of tier - the full
@@ -350,6 +458,15 @@ def summarize_metrics(rows, name_col, metrics, source, name_prefix=""):
     columns = {}
     for metric_key, _label, column, worse_is_high in metrics:
         columns[metric_key] = [_to_float(row.get(column)) for row in rows if row.get(column) not in (None, "")]
+
+    if baseline is not None:
+        for metric_key, label, _column, _worse_is_high in metrics:
+            entry = baseline.get(baseline_prefix + metric_key)
+            if entry and entry.get("n", 0) >= MIN_BASELINE_N:
+                print(f"  {label}: graded against cross-study baseline (n={entry['n']}, mean={entry['mean']:.3f}, sd={baseline_std(entry):.3f})")
+            else:
+                have = entry.get("n", 0) if entry else 0
+                print(f"  {label}: baseline has only {have} historical value(s) (<{MIN_BASELINE_N}), grading against this run's own cohort instead")
 
     flags = []
     metric_points = {metric_key: {} for metric_key, *_ in metrics}
@@ -361,15 +478,21 @@ def summarize_metrics(rows, name_col, metrics, source, name_prefix=""):
             if raw in (None, ""):
                 continue
             value = _to_float(raw)
-            tier, frac = metric_severity(columns[metric_key], value, worse_is_high)
+            baseline_entry = baseline.get(baseline_prefix + metric_key) if baseline is not None else None
+            tier, detail, method = metric_severity(columns[metric_key], value, worse_is_high, baseline_entry)
             metric_points[metric_key][name] = (value, tier)
             if tier != "ok":
-                row_metrics.append((metric_key, label, value, tier, frac))
+                row_metrics.append((metric_key, label, value, tier, detail, method))
         if row_metrics:
             overall = "ok"
-            for *_rest, tier, _frac in row_metrics:
+            for *_rest, tier, _detail, _method in row_metrics:
                 overall = worse_tier(overall, tier)
             flags.append((name, overall, row_metrics, source))
+
+    if baseline is not None:
+        for metric_key, _label, _column, _worse_is_high in metrics:
+            update_baseline(baseline, baseline_prefix + metric_key, columns[metric_key])
+
     return flags, metric_points
 
 
@@ -417,6 +540,7 @@ def main():
     flagged_names = set()  # every filename with a severe/moderate metric -- feeds flagged_subjects_out
     qc_flags: dict = {}  # "sub-X_ses-Y" -> list of {source, metric, value, tier, reason} -- feeds qc_flags.json
     qc_metrics: dict = {}  # metric_key -> {"label":..., "worse_is_high":..., "values": {name: {"value":..., "tier":...}}}
+    baseline = load_baseline()  # metric_key -> {n, mean, m2}, shared across every project ever checked (see BASELINE_PATH)
 
     def record_metric_points(metric_key, label, worse_is_high, points):
         bucket = qc_metrics.setdefault(metric_key, {"label": label, "worse_is_high": worse_is_high, "values": {}})
@@ -427,15 +551,18 @@ def main():
 
     def add_flags(flags):
         for name, overall_tier, row_metrics, source in flags:
-            metric_str = " ".join(f"{mk}={v:.3f}[{t}]" for mk, _label, v, t, _f in row_metrics)
+            metric_str = " ".join(f"{mk}={v:.3f}[{t}]" for mk, _label, v, t, _d, _m in row_metrics)
             print(f"  {'⚠️ ' if overall_tier == 'severe' else '• '}{name}: {overall_tier} - {metric_str}")
             if overall_tier in ("severe", "moderate"):
                 flagged_names.add(name)
             key = qc_key(name)
             if not key:
                 continue
-            for metric_key, label, value, tier, frac in row_metrics:
-                reason = f"{label}={value:.3f} (worst {frac * 100:.0f}% of cohort)"
+            for metric_key, label, value, tier, detail, method in row_metrics:
+                if method == "baseline":
+                    reason = f"{label}={value:.3f} ({detail:+.1f} SD from historical mean)"
+                else:
+                    reason = f"{label}={value:.3f} (worst {detail * 100:.0f}% of cohort)"
                 qc_flags.setdefault(key, []).append({
                     "source": source, "metric": metric_key, "value": value, "tier": tier, "reason": reason,
                 })
@@ -450,7 +577,7 @@ def main():
             run_qc(dsi_studio_cmd, src_patterns, out_path, bool(args.check_btable), len(src_files))
             dereference_report_filenames(out_path, src_files)
             rows = load_tsv(out_path)
-            flags, metric_points = summarize_metrics(rows, "file name", SRC_METRICS, "src")
+            flags, metric_points = summarize_metrics(rows, "file name", SRC_METRICS, "src", baseline=baseline)
             print(f"  {len(rows)} file(s) checked, {len(flags)} with at least one non-ok metric:")
             add_flags(flags)
             for metric_key, label, _column, worse_is_high in SRC_METRICS:
@@ -461,8 +588,13 @@ def main():
     if not args.skip_fib:
         fib_dir = resolve_search_dir(source_dir, "fib", FIB_PATTERNS)
         fib_passes = [
-            ("QSDR", find_files(fib_dir, FIB_PATTERNS), [fib_dir / p for p in FIB_PATTERNS], output_dir / "fz_qc_qsdr.tsv"),
-            ("GQI", find_subject_files(source_dir, "fib", FIB_PATTERNS), [source_dir / f"sub-*/fib/{p}" for p in FIB_PATTERNS], output_dir / "fz_qc_gqi.tsv"),
+            (
+                label_name,
+                find_method_fib_files(source_dir, fib_dir, patterns),
+                [fib_dir / p for p in patterns] + [source_dir / f"sub-*/fib/{p}" for p in patterns],
+                output_dir / f"fz_qc_{label_name.lower()}.tsv",
+            )
+            for label_name, patterns in FIB_METHOD_PATTERNS.items()
         ]
         for label_name, fib_files, fib_patterns, out_path in fib_passes:
             if not fib_files:
@@ -473,7 +605,7 @@ def main():
             dereference_report_filenames(out_path, fib_files)
             rows = load_tsv(out_path)
             source = f"fib_{label_name.lower()}"
-            flags, metric_points = summarize_metrics(rows, "FileName", FIB_METRICS, source)
+            flags, metric_points = summarize_metrics(rows, "FileName", FIB_METRICS, source, baseline=baseline, baseline_prefix=f"{source}_")
             print(f"  {len(rows)} file(s) checked, {len(flags)} with at least one non-ok metric:")
             add_flags(flags)
             for metric_key, label, _column, worse_is_high in FIB_METRICS:
@@ -493,13 +625,16 @@ def main():
                     writer.writeheader()
                     writer.writerows(rows)
                 print(f"Ingested {len(qc_files)} qsiprep image_qc.csv file(s), {len(rows)} row(s) -> {out_path}")
-                flags, metric_points = summarize_metrics(rows, "file_name", QSIPREP_METRICS, "qsiprep")
+                flags, metric_points = summarize_metrics(rows, "file_name", QSIPREP_METRICS, "qsiprep", baseline=baseline)
                 print(f"  {len(rows)} session(s) checked, {len(flags)} with at least one non-ok metric:")
                 add_flags(flags)
                 for metric_key, label, _column, worse_is_high in QSIPREP_METRICS:
                     record_metric_points(metric_key, label, worse_is_high, metric_points[metric_key])
             else:
                 print(f"No desc-image_qc.csv files found under {qsiprep_dir}, skipping qsiprep QC pass")
+
+    save_baseline(baseline)
+    print(f"\nUpdated cross-study baseline ({len(baseline)} metric(s)) -> {BASELINE_PATH}")
 
     if qc_flags:
         flags_path = output_dir / "qc_flags.json"
