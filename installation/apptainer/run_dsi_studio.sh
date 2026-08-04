@@ -10,7 +10,7 @@
 # this file.
 set -euo pipefail
 
-IMAGE="${DSI_APPTAINER_IMAGE:-/data/local/software/apptainer_images/dsi_studio_latest.sif}"
+IMAGE="${DSI_APPTAINER_IMAGE:-/data/local/software/apptainer_images/dsi_studio/dsi_studio_latest.sif}"
 BIND="${DSI_APPTAINER_BIND:-/data/local}"
 export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-/data/local/tmp_big/apptainer_cache}"
 export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-/data/local/tmp_big/tmp}"

@@ -9,7 +9,7 @@
 # binary (not the tag) is what we use to name the image.
 set -euo pipefail
 
-IMAGES_DIR="${DSI_APPTAINER_IMAGES_DIR:-/data/local/software/apptainer_images}"
+IMAGES_DIR="${DSI_APPTAINER_IMAGES_DIR:-/data/local/software/apptainer_images/dsi_studio}"
 DEF_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dsi_studio.def"
 REPO="frankyeh/DSI-Studio"
 ASSET_NAME="dsi_studio_ubuntu2204.zip"

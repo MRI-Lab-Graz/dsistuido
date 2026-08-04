@@ -146,7 +146,6 @@
         <div class="row g-2">
             <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_require_mask"><label class="form-check-label" for="p_require_mask">require_mask</label></div>
             <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_require_t1w"><label class="form-check-label" for="p_require_t1w">require_t1w</label></div>
-            <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_skip_existing"><label class="form-check-label" for="p_skip_existing">skip_existing</label></div>
             <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_verify_rawdata"><label class="form-check-label" for="p_verify_rawdata">verify_rawdata</label></div>
             <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_pilot"><label class="form-check-label" for="p_pilot">pilot</label></div>
             <div class="col-md-3 form-check"><input class="form-check-input" type="checkbox" id="p_dry_run"><label class="form-check-label" for="p_dry_run">dry_run</label></div>
@@ -319,7 +318,9 @@
             connectivity_threads: value('p_connectivity_threads'),
             require_mask: checked('p_require_mask'),
             require_t1w: checked('p_require_t1w'),
-            skip_existing: checked('p_skip_existing'),
+            // Always skip existing SRC/FIB/etc; the Force dropdown above is
+            // the one control for overwriting - no separate checkbox for it.
+            skip_existing: true,
             verify_rawdata: checked('p_verify_rawdata'),
             pilot: checked('p_pilot'),
             dry_run: checked('p_dry_run'),
@@ -347,7 +348,7 @@
             if (data[key] !== undefined && data[key] !== null) document.getElementById(id).value = data[key];
         });
 
-        ['require_mask','require_t1w','skip_existing','verify_rawdata','pilot','dry_run','run_connectivity','connectivity_only','apptainer','datalad','push_derivatives'].forEach(k => {
+        ['require_mask','require_t1w','verify_rawdata','pilot','dry_run','run_connectivity','connectivity_only','apptainer','datalad','push_derivatives'].forEach(k => {
             const el = document.getElementById('p_' + k);
             if (el && data[k] !== undefined) el.checked = Boolean(data[k]);
         });

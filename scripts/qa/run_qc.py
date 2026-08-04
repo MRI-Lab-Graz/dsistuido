@@ -109,7 +109,7 @@ sys.stdout.reconfigure(line_buffering=True)
 # silently drifts out of sync with what a project was actually processed with.
 DEFAULT_DSI_STUDIO_CMD = "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio"
 APPTAINER_WRAPPER = Path(__file__).resolve().parents[2] / "installation" / "apptainer" / "run_dsi_studio.sh"
-DEFAULT_APPTAINER_IMAGES_DIR = Path("/data/local/software/apptainer_images")
+DEFAULT_APPTAINER_IMAGES_DIR = Path("/data/local/software/apptainer_images/dsi_studio")
 
 SRC_PATTERNS = ["*.sz", "*.src.gz"]
 FIB_PATTERNS = ["*.fz"]

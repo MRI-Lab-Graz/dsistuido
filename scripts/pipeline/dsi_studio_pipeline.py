@@ -40,7 +40,7 @@ from typing import List, Optional, Tuple, Dict
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qa"))
 from src_thumbnail import ensure_src_thumbnail  # noqa: E402
 
-DEFAULT_APPTAINER_IMAGES_DIR = Path("/data/local/software/apptainer_images")
+DEFAULT_APPTAINER_IMAGES_DIR = Path("/data/local/software/apptainer_images/dsi_studio")
 
 class ColoredFormatter(logging.Formatter):
     """Custom formatter with colors for terminal output"""
