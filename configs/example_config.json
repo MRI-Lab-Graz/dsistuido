@@ -7,7 +7,6 @@
     "Cerebellum-SUIT",
     "CerebrA",
     "FreeSurferSeg",
-    "HCP842_tractography",
     "FreeSurferDKT_Cortical",
     "FreeSurferDKT_Subcortical",
     "Brainnectome",
@@ -18,9 +17,7 @@
     "BrainSeg"
   ],
   "connectivity_values": [
-    "count",
-    "ncount",
-    "ncount2",
+    "tracts",
     "mean_length",
     "qa",
     "fa",

@@ -1,0 +1,4 @@
+INFO:webui:Starting DSI Studio Web UI...
+INFO:webui:Web UI available at: http://127.0.0.1:5000
+INFO:webui:Press Ctrl+C to stop
+INFO:waitress:Serving on http://127.0.0.1:5000

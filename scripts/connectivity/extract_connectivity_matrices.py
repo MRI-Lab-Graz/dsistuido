@@ -37,6 +37,12 @@ except ImportError:
     print("⚠️ Warning: scipy not available - .mat to CSV conversion disabled")
     print("   Install with: pip install scipy")
 
+# Host-side atlas library, independent of whichever DSI Studio binary/Apptainer
+# image is pinned (image rebuilds have changed the bundled atlas set before).
+# See /data/local/software/dsi_studio_atlases/SOURCES.md. Matches gui.py's and
+# dsi_studio_pipeline.py's SHARED_ATLAS_DIR.
+SHARED_ATLAS_DIR = Path("/data/local/software/dsi_studio_atlases/human")
+
 # Default configuration based on DSI Studio source code analysis
 DEFAULT_CONFIG = {
     # Common atlases - Note: Actual availability depends on your DSI Studio installation
@@ -45,10 +51,15 @@ DEFAULT_CONFIG = {
         'Talairach', 'FreeSurferDKT', 'FreeSurferDKT_Cortical', 'Schaefer100', 
         'Schaefer200', 'Schaefer400', 'Gordon333', 'Power264'
     ],
-    # All connectivity values from DSI Studio source code
-    'connectivity_values': ['count', 'ncount', 'ncount2', 'mean_length', 'qa', 'fa', 'dti_fa', 
-                           'md', 'ad', 'rd', 'iso', 'rdi', 'ndi', 'dti_ad', 'dti_rd', 
-                           'dti_md', 'trk'],
+    # Connectivity values matched by substring against DSI Studio's internal metric
+    # names (cmd/trk.cpp: tipl::contains(metrics_name, value)) - only filters which
+    # metrics get a .connectogram.txt/.network_measures.txt; the .connectivity.mat
+    # always contains every metric regardless. 'count'/'ncount'/'ncount2' never match
+    # anything in current DSI Studio builds - the streamline-count metric is
+    # internally named "number of tracts", so 'tracts' is the value that matches it
+    # (there is no separate normalized-count metric anymore, only raw count).
+    'connectivity_values': ['tracts', 'mean_length', 'qa', 'fa', 'dti_fa',
+                           'md', 'ad', 'rd', 'iso', 'rdi'],
     'track_count': 100000,
     'thread_count': 8,
     'dsi_studio_cmd': 'dsi_studio',
@@ -70,7 +81,11 @@ DEFAULT_CONFIG = {
     'connectivity_options': {
         'connectivity_type': 'pass',  # 'pass' or 'end'
         'connectivity_threshold': 0.001,  # Threshold for connectivity matrix
-        'connectivity_output': 'matrix,connectogram,measure'  # Output types
+        # Output types: matrix (.connectivity.mat), connectogram (.connectogram.txt),
+        # network (.network_measures.txt - graph-theory metrics). NOT 'measure' -
+        # DSI Studio checks for the substring 'network', so 'measure' silently
+        # produces no network_measures.txt at all.
+        'connectivity_output': 'matrix,connectogram,network'  # Output types
     }
 }
 
@@ -562,7 +577,7 @@ class ConnectivityExtractor:
         output_prefix = atlas_dir / f"{base_name}_{atlas}"
         
         # Check if this atlas has already been processed (skip_existing)
-        if atlas_dir.exists() and any(atlas_dir.glob(f"{base_name}_{atlas}*")):
+        if not self.config.get('overwrite') and atlas_dir.exists() and any(atlas_dir.glob(f"{base_name}_{atlas}*")):
             self.logger.info(f"Atlas '{atlas}' already processed, skipping: {atlas_dir.name}")
             return {
                 'atlas': atlas,
@@ -571,13 +586,20 @@ class ConnectivityExtractor:
                 'output_dir': str(atlas_dir)
             }
         
+        # Resolve to a full path in the shared atlas library when available, so
+        # atlas choice doesn't depend on whatever happens to be baked into the
+        # currently-pinned DSI Studio binary/Apptainer image. Falls back to the
+        # bare name (DSI Studio's own built-in atlas lookup) otherwise.
+        atlas_path = SHARED_ATLAS_DIR / f"{atlas}.nii.gz"
+        connectivity_arg = str(atlas_path) if atlas_path.exists() else atlas
+
         # Build DSI Studio command with comprehensive parameters
         cmd = [
             self.config['dsi_studio_cmd'],
             '--action=trk',
             f'--source={input_file}',
             f'--tract_count={self.config["track_count"]}',
-            f'--connectivity={atlas}',
+            f'--connectivity={connectivity_arg}',
             f'--connectivity_value={",".join(self.config["connectivity_values"])}',
             f'--connectivity_type={self.config["connectivity_options"]["connectivity_type"]}',
             f'--connectivity_output={self.config["connectivity_options"]["connectivity_output"]}',
@@ -1526,7 +1548,10 @@ For more help: see README.md
     
     parser.add_argument('--reconstruction_method', type=int, choices=[4, 7],
                        help='🔬 Override config: Reconstruction method (4=GQI/native, 7=QSDR/MNI)')
-    
+
+    parser.add_argument('--overwrite', action='store_true',
+                       help='🔁 Reprocess atlases even if output already exists (default: skip already-processed atlases)')
+
     args = parser.parse_args()
     
     # Show help if no arguments provided
@@ -1617,6 +1642,8 @@ For more help: see README.md
     if args.reconstruction_method is not None:
         config['reconstruction_method'] = args.reconstruction_method
         logging.info(f"Overriding reconstruction_method from CLI: {args.reconstruction_method}")
+
+    config['overwrite'] = args.overwrite
     
     # Check for required arguments
     if not args.input or not args.output:

@@ -53,6 +53,10 @@ APP_SIGNATURE = "dsi-studio-webui"
 # Matches the default in scripts/pipeline/dsi_studio_pipeline.py's --dsi_studio_cmd
 # argument, so atlas discovery looks in the same place the pipeline actually runs.
 DEFAULT_DSI_STUDIO_CMD = "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio"
+# Host-side atlas library, independent of whichever DSI Studio binary/Apptainer
+# image is currently pinned (image rebuilds have changed the bundled atlas set
+# before). See /data/local/software/dsi_studio_atlases/SOURCES.md.
+SHARED_ATLAS_DIR = Path("/data/local/software/dsi_studio_atlases/human")
 # installation/install_git_annex.sh's default install location. Job
 # subprocesses need this prepended to PATH explicitly (see launch_job) rather
 # than relying on inherited PATH: the web server's own process environment is
@@ -239,13 +243,14 @@ def _resolve_input_path(path_value: Optional[str]) -> Path:
     return candidate
 
 
-def _atlas_human_dir(dsi_studio_cmd: Optional[str]) -> Path:
-    """DSI Studio ships its bundled atlases at <install_dir>/atlas/human -
-    same lookup dsi_studio_pipeline.py uses to validate a connectivity
-    config's atlas list before a run.
+def _atlas_human_dir(dsi_studio_cmd: Optional[str] = None) -> Path:
+    """Atlases live in SHARED_ATLAS_DIR, not <dsi_studio install>/atlas/human -
+    that install-local path changes contents (and breaks entirely for the
+    Apptainer wrapper) every time the pinned image is rebuilt. dsi_studio_cmd
+    is accepted for API-compatibility with existing callers but no longer
+    used; dsi_studio_pipeline.py's atlas validation uses the same constant.
     """
-    cmd = (dsi_studio_cmd or "").strip() or DEFAULT_DSI_STUDIO_CMD
-    return _resolve_input_path(cmd).parent / "atlas" / "human"
+    return SHARED_ATLAS_DIR
 
 
 def _resolve_project_settings_dir(project_root_value: Optional[str]) -> Optional[Path]:
@@ -1043,19 +1048,22 @@ def api_qc_thumbnails():
 @app.route("/api/qc/thumbnail_file", methods=["GET"])
 def api_qc_thumbnail_file():
     """Serve one thumbnail PNG. `name` is constrained to a bare filename
-    (no path separators) and the resolved path is checked to stay inside
-    <output_dir>/reports/thumbnails - output_dir itself is user-supplied
-    (same trust model as the rest of this local-only tool's path picker),
-    but this still guards against a crafted `name` walking outside that
-    one subfolder.
+    (no path separators), which rules out walking outside
+    <output_dir>/reports/thumbnails by construction - output_dir itself is
+    user-supplied (same trust model as the rest of this local-only tool's
+    path picker). Deliberately does not additionally require
+    target.resolve().parent == thumbnails_dir.resolve(): thumbnail PNGs are
+    frequently git-annex symlinks whose resolved target lives under
+    .git/annex/objects/ outside this folder, so that check would reject
+    every annexed thumbnail as "not found".
     """
     output_dir_value = (request.args.get("output_dir") or "").strip()
     name = (request.args.get("name") or "").strip()
     if not output_dir_value or not name or "/" in name or "\\" in name:
         return _json_error("Invalid output_dir or name", 400)
     thumbnails_dir = _resolve_input_path(output_dir_value) / "reports" / "thumbnails"
-    target = (thumbnails_dir / name).resolve()
-    if target.parent != thumbnails_dir.resolve() or not target.is_file():
+    target = thumbnails_dir / name
+    if not target.is_file():
         return _json_error("Thumbnail not found", 404)
     return send_file(target, mimetype="image/png")
 
@@ -1409,10 +1417,10 @@ def api_fs_write_json():
 
 @app.route("/api/atlases/list", methods=["GET"])
 def api_atlases_list():
-    """List atlases actually installed on this machine (matching .nii.gz +
-    .txt label file pairs under DSI Studio's atlas/human dir), so the
-    connectivity settings UI only offers atlases that will actually be found
-    at run time instead of a hardcoded, possibly stale, name list.
+    """List atlases available in the shared atlas library (matching .nii.gz +
+    .txt label file pairs), so the connectivity settings UI only offers
+    atlases that will actually be found at run time instead of a hardcoded,
+    possibly stale, name list.
     """
     dsi_studio_cmd = request.args.get("dsi_studio_cmd", "")
     atlas_dir = _atlas_human_dir(dsi_studio_cmd)

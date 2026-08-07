@@ -41,6 +41,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qa"))
 from src_thumbnail import ensure_src_thumbnail  # noqa: E402
 
 DEFAULT_APPTAINER_IMAGES_DIR = Path("/data/local/software/apptainer_images/dsi_studio")
+# Host-side atlas library, independent of whichever DSI Studio binary/Apptainer
+# image is pinned (image rebuilds have changed the bundled atlas set before).
+# See /data/local/software/dsi_studio_atlases/SOURCES.md. Matches gui.py's
+# SHARED_ATLAS_DIR.
+SHARED_ATLAS_DIR = Path("/data/local/software/dsi_studio_atlases/human")
 
 class ColoredFormatter(logging.Formatter):
     """Custom formatter with colors for terminal output"""
@@ -119,9 +124,7 @@ class DSIStudioPipeline:
         else:
             self.dsi_studio_cmd = args.dsi_studio_cmd
 
-        # Atlas presence checks need a real DSI Studio install directory even
-        # when --apptainer swaps self.dsi_studio_cmd for the container wrapper.
-        self.atlas_reference_dir = Path(self.dsi_studio_cmd).parent
+        self.atlas_reference_dir = SHARED_ATLAS_DIR
 
         self.use_datalad = args.datalad
         self.use_apptainer = args.apptainer or self.use_datalad  # datalad containers-run needs a registered container
@@ -147,7 +150,7 @@ class DSIStudioPipeline:
         self.force_components = set()
         if self.force_arg:
             if self.force_arg == 'all':
-                self.force_components = {'src', 'fib', 'diffs', 'database'}
+                self.force_components = {'src', 'fib', 'diffs', 'database', 'connectivity'}
             else:
                 self.force_components.add(self.force_arg)
         self.subject_filter = self._normalize_bids_filter_set(args.subject, "sub")
@@ -911,7 +914,7 @@ class DSIStudioPipeline:
         """Check if a specific component should be force-regenerated.
         
         Args:
-            component: One of 'src', 'fib', 'diffs', 'database'
+            component: One of 'src', 'fib', 'diffs', 'database', 'connectivity'
         
         Returns:
             True if force regeneration is enabled for this component
@@ -1648,12 +1651,9 @@ class DSIStudioPipeline:
                     self.logger.warning("No atlases specified in connectivity config")
                     return True
                 
-                # Check if atlases exist in DSI Studio (use the real install dir for
-                # this check even in --apptainer mode, since dsi_studio_cmd then
-                # points at the container wrapper script, not an actual install).
-                atlas_dir = self.atlas_reference_dir / "atlas" / "human"
+                atlas_dir = self.atlas_reference_dir
                 if not atlas_dir.exists():
-                    self.logger.warning(f"DSI Studio atlas directory not found: {atlas_dir}")
+                    self.logger.warning(f"Shared atlas directory not found: {atlas_dir}")
                     return True
                 
                 missing_atlases = []
@@ -1722,7 +1722,36 @@ class DSIStudioPipeline:
                 f"connectivity extraction will run without datalad provenance tracking for this call."
             )
 
+        # When a connectivity config is given, "already done" must mean every
+        # configured atlas has output - not just *some* file existing. The
+        # atlas list grows over time (e.g. atlases restored to the shared
+        # library after being dropped from a pinned image), and a session
+        # processed under an older, shorter atlas list must not be skipped
+        # over before the newly-added atlases get backfilled.
+        expected_atlases = None
+        if self.connectivity_config and self.connectivity_config.exists():
+            try:
+                with open(self.connectivity_config, 'r') as f:
+                    expected_atlases = json.load(f).get('atlases') or None
+            except Exception as e:
+                self.logger.warning(f"Could not read atlas list from connectivity config: {e}")
+
         for fib in fib_files:
+            base_name = fib.stem.replace('.fib', '').replace('.gz', '')
+            existing_dir = self.connectivity_output_dir / base_name
+            if expected_atlases:
+                already_done = existing_dir.exists() and all(
+                    any(existing_dir.glob(f"**/by_atlas/{atlas}/{base_name}_{atlas}*"))
+                    for atlas in expected_atlases
+                )
+            else:
+                already_done = existing_dir.exists() and any(existing_dir.rglob('*.connectivity.*'))
+            if already_done and self.skip_existing and not self._should_force('connectivity'):
+                self.logger.info(f"Connectivity output exists, skipping: {base_name}")
+                continue
+            elif already_done and self._should_force('connectivity'):
+                self.logger.info(f"Connectivity output exists but --force connectivity is set, will overwrite: {base_name}")
+
             cmd = ["python3", str(extractor)]
             if self.connectivity_config:
                 cmd += ["--config", str(self.connectivity_config)]
@@ -1732,6 +1761,8 @@ class DSIStudioPipeline:
             cmd += ["--dsi_studio_cmd", self.dsi_studio_cmd]
             # Pass reconstruction method from CLI to override config
             cmd += ["--reconstruction_method", str(self.method)]
+            if self._should_force('connectivity'):
+                cmd += ["--overwrite"]
             cmd += [str(fib), str(self.connectivity_output_dir)]
             self.logger.info(f"Launching connectivity extraction for {fib.name}")
             if can_wrap_in_datalad:
@@ -2214,7 +2245,7 @@ if __name__ == "__main__":
     parser.add_argument("--require_mask", action="store_true", help="Skip subjects without brain mask")
     parser.add_argument("--require_t1w", action="store_true", help="Skip subjects without T1w")
     parser.add_argument("--skip_existing", action="store_true", help="Skip subjects if SRC/FIB already exist")
-    parser.add_argument("--force", nargs='?', const='all', help="Force overwrite: 'database' (only db), 'diffs', 'src', 'fib', 'all' (default: all)")
+    parser.add_argument("--force", nargs='?', const='all', help="Force overwrite: 'database' (only db), 'diffs', 'src', 'fib', 'connectivity', 'all' (default: all)")
     parser.add_argument("--min_file_age", type=int, default=300, help="Minimum file age in seconds (default: 300s/5min) to avoid processing files still being written. Ignored under --qsiprep_datalad, where files are freshly fetched on demand and their local mtime reflects fetch time, not whether the source data is still being written.")
     parser.add_argument("--subject", default="all", help="Comma-separated subject ID(s) to (re)process, e.g. 'sub-1291076,sub-1291111' or '1291076,1291111' (default: all subjects). Combine with --force (e.g. --subject 1291076,1291111 --force fib) to regenerate just the subjects a QC pass flagged, without touching the rest of the cohort.")
     parser.add_argument("--session", default="all", help="BIDS session to process, e.g. 'ses-1' or '1' (default: all sessions)")
