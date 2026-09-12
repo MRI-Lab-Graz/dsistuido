@@ -113,4 +113,7 @@ crea_qa_fa.html
 scripts/web_settings/pipeline*.json
 scripts/web_settings/projects_registry.json
 scripts/web_settings/ntfy.env
+scripts/web_settings/jobs_state.json
+scripts/web_settings/webui_server_state.json
+scripts/web_logs/
 .gitignore

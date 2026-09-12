@@ -39,7 +39,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="{{ url_for('static', filename='js/plotly-2.35.2.min.js') }}"></script>
 <script>
 (function() {
     const TIER_COLOR = { severe: '#dc3545', moderate: '#fd7e14', mild: '#ffc107', ok: '#0d6efd' };

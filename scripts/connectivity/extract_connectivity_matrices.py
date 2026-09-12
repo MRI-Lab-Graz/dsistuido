@@ -89,14 +89,30 @@ DEFAULT_CONFIG = {
     }
 }
 
+def _resolve_logs_dir(output_dir: str = None) -> str:
+    """Where ConnectivityExtractor's own session log file goes: scoped
+    under output_dir when it's known at construction time, else the old
+    bare 'logs' (relative to CWD) as a last-resort fallback."""
+    if output_dir:
+        return os.path.join(output_dir, 'logs')
+    return 'logs'
+
+
 class ConnectivityExtractor:
     """Main class for extracting connectivity matrices from DSI Studio."""
-    
-    def __init__(self, config: Dict = None):
-        """Initialize the extractor with configuration."""
+
+    def __init__(self, config: Dict = None, output_dir: str = None):
+        """Initialize the extractor with configuration.
+
+        output_dir: passed through to setup_logging() so the session log
+        can be scoped next to the run's actual output instead of wherever
+        the process's CWD happens to be. Optional - callers that don't know
+        it yet (or historically didn't pass it) fall back to the old
+        CWD-relative 'logs' dir.
+        """
         # Deep merge config with defaults to preserve nested dict defaults
         self.config = self._merge_config(DEFAULT_CONFIG, config or {})
-        self.setup_logging()
+        self.setup_logging(output_dir)
     
     def _merge_config(self, default: Dict, override: Dict) -> Dict:
         """Deep merge override config into default config."""
@@ -287,10 +303,17 @@ class ConnectivityExtractor:
             
         return pilot_files
         
-    def setup_logging(self):
-        """Set up logging configuration with dedicated logs folder."""
-        # Create logs directory if it doesn't exist
-        logs_dir = 'logs'
+    def setup_logging(self, output_dir: str = None):
+        """Set up logging configuration with dedicated logs folder.
+
+        output_dir: when known (the CLI's --output / positional output_dir),
+        scope the session log under it instead of a bare 'logs' relative to
+        the process's CWD - a job launched by the web UI or the pipeline
+        doesn't run with the repo (or the run's output dir) as CWD, so the
+        old unscoped default scattered log files wherever the launcher's
+        CWD happened to be.
+        """
+        logs_dir = _resolve_logs_dir(output_dir)
         os.makedirs(logs_dir, exist_ok=True)
         
         # Generate timestamped log filename
@@ -568,30 +591,43 @@ class ConnectivityExtractor:
         
         return run_dir
     
-    def extract_connectivity_matrix(self, input_file: str, output_dir: Path, 
-                                  atlas: str, base_name: str) -> Dict:
-        """Extract connectivity matrix for a specific atlas."""
-        self.logger.info(f"Processing atlas: {atlas}")
-        
-        atlas_dir = output_dir / "by_atlas" / atlas
-        output_prefix = atlas_dir / f"{base_name}_{atlas}"
-        
-        # Check if this atlas has already been processed (skip_existing)
-        if not self.config.get('overwrite') and atlas_dir.exists() and any(atlas_dir.glob(f"{base_name}_{atlas}*")):
-            self.logger.info(f"Atlas '{atlas}' already processed, skipping: {atlas_dir.name}")
-            return {
-                'atlas': atlas,
-                'success': True,
-                'skipped': True,
-                'output_dir': str(atlas_dir)
-            }
-        
-        # Resolve to a full path in the shared atlas library when available, so
-        # atlas choice doesn't depend on whatever happens to be baked into the
-        # currently-pinned DSI Studio binary/Apptainer image. Falls back to the
-        # bare name (DSI Studio's own built-in atlas lookup) otherwise.
-        atlas_path = SHARED_ATLAS_DIR / f"{atlas}.nii.gz"
-        connectivity_arg = str(atlas_path) if atlas_path.exists() else atlas
+    def extract_connectivity_matrix(self, input_file: str, output_dir: Path,
+                                  atlases: List[str], base_name: str) -> List[Dict]:
+        """Extract connectivity matrices for all given atlases in a single tracking pass.
+
+        Fiber tracking (the expensive step - minutes to hours per file) is identical
+        regardless of atlas; only the region-to-region connectivity computation differs.
+        DSI Studio's --connectivity flag accepts a comma-separated list of atlases and
+        computes connectivity for all of them from one tracking run, so a single trk
+        call here replaces what used to be one full tracking run per atlas (verified:
+        "fiber tracking" step runs once in the trace regardless of atlas count).
+        """
+        results = []
+        pending_atlases = []
+        for atlas in atlases:
+            atlas_dir = output_dir / "by_atlas" / atlas
+            # Check if this atlas has already been processed (skip_existing)
+            if not self.config.get('overwrite') and atlas_dir.exists() and any(atlas_dir.glob(f"{base_name}_{atlas}*")):
+                self.logger.info(f"Atlas '{atlas}' already processed, skipping: {atlas_dir.name}")
+                results.append({'atlas': atlas, 'success': True, 'skipped': True, 'output_dir': str(atlas_dir)})
+            else:
+                pending_atlases.append(atlas)
+
+        if not pending_atlases:
+            return results
+
+        self.logger.info(f"Processing {len(pending_atlases)} atlases in a single tracking pass: {', '.join(pending_atlases)}")
+
+        # Resolve to full paths in the shared atlas library when available, so atlas
+        # choice doesn't depend on whatever happens to be baked into the currently-pinned
+        # DSI Studio binary/Apptainer image. Falls back to the bare name (DSI Studio's
+        # own built-in atlas lookup) otherwise.
+        connectivity_args = [
+            str(SHARED_ATLAS_DIR / f"{atlas}.nii.gz") if (SHARED_ATLAS_DIR / f"{atlas}.nii.gz").exists() else atlas
+            for atlas in pending_atlases
+        ]
+
+        output_prefix = output_dir / base_name
 
         # Build DSI Studio command with comprehensive parameters
         cmd = [
@@ -599,7 +635,7 @@ class ConnectivityExtractor:
             '--action=trk',
             f'--source={input_file}',
             f'--tract_count={self.config["track_count"]}',
-            f'--connectivity={connectivity_arg}',
+            f'--connectivity={",".join(connectivity_args)}',
             f'--connectivity_value={",".join(self.config["connectivity_values"])}',
             f'--connectivity_type={self.config["connectivity_options"]["connectivity_type"]}',
             f'--connectivity_output={self.config["connectivity_options"]["connectivity_output"]}',
@@ -633,47 +669,70 @@ class ConnectivityExtractor:
         if tracking_params.get('random_seed', 0) != 0:
             cmd.append(f'--random_seed={tracking_params["random_seed"]}')
             
-        # Execute command
+        # Execute command once for all pending atlases
         start_time = datetime.now()
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=3600  # 1 hour timeout
+                timeout=3600 * len(pending_atlases)  # 1 hour budget per atlas, shared tracking pass
             )
-            
-            end_time = datetime.now()
-            duration = (end_time - start_time).total_seconds()
-            
-            success = result.returncode == 0
-            
-            if success:
-                self.logger.info(f"✓ Successfully processed {atlas} in {duration:.1f}s")
-                # Organize output files by metric type
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"✗ Timeout while processing atlases: {', '.join(pending_atlases)}")
+            for atlas in pending_atlases:
+                results.append({'atlas': atlas, 'success': False, 'duration': 3600, 'error': 'Timeout'})
+            return results
+
+        duration = (datetime.now() - start_time).total_seconds()
+        per_atlas_duration = duration / len(pending_atlases)
+
+        if result.returncode != 0:
+            self.logger.error(f"✗ Failed to process atlases: {', '.join(pending_atlases)}")
+            self.logger.error(f"Error output: {result.stderr}")
+            for atlas in pending_atlases:
+                results.append({
+                    'atlas': atlas,
+                    'success': False,
+                    'duration': per_atlas_duration,
+                    'command': ' '.join(cmd),
+                    'stdout': result.stdout,
+                    'stderr': result.stderr
+                })
+            return results
+
+        # DSI Studio names each atlas's outputs by appending the atlas name to the
+        # output prefix (e.g. "{base_name}.tt.gz.AAL3.connectivity.mat"). Move each
+        # atlas's files into its own by_atlas directory, renamed to match the
+        # per-atlas naming convention ("{base_name}_{atlas}.tt.gz...") that
+        # skip_existing and _organize_output_files rely on.
+        shared_tag = f"{output_prefix.name}.tt.gz"
+        for atlas in pending_atlases:
+            atlas_dir = output_dir / "by_atlas" / atlas
+            atlas_dir.mkdir(parents=True, exist_ok=True)
+            moved = []
+            for f in output_dir.glob(f"{shared_tag}.{atlas}.*"):
+                new_path = atlas_dir / f.name.replace(shared_tag, f"{base_name}_{atlas}.tt.gz", 1)
+                f.rename(new_path)
+                moved.append(str(new_path))
+
+            if moved:
+                self.logger.info(f"✓ Successfully processed {atlas} in {per_atlas_duration:.1f}s (shared tracking pass)")
                 self._organize_output_files(output_dir, atlas, base_name)
             else:
-                self.logger.error(f"✗ Failed to process {atlas}")
-                self.logger.error(f"Error output: {result.stderr}")
-            
-            return {
+                self.logger.error(f"✗ No output files found for atlas '{atlas}' after extraction")
+
+            results.append({
                 'atlas': atlas,
-                'success': success,
-                'duration': duration,
+                'success': bool(moved),
+                'duration': per_atlas_duration,
                 'command': ' '.join(cmd),
                 'stdout': result.stdout,
                 'stderr': result.stderr,
-                'output_files': [str(f) for f in atlas_dir.glob(f"{base_name}_{atlas}*")]
-            }
-            
-        except subprocess.TimeoutExpired:
-            self.logger.error(f"✗ Timeout while processing {atlas}")
-            return {
-                'atlas': atlas,
-                'success': False,
-                'duration': 3600,
-                'error': 'Timeout'
-            }
+                'output_files': moved
+            })
+
+        return results
     
     def _organize_output_files(self, output_dir: Path, atlas: str, base_name: str):
         """Organize output files by metric type and create symlinks for easy access."""
@@ -743,11 +802,8 @@ class ConnectivityExtractor:
             self.logger.info(f"📊 Version: {dsi_check['version']}")
         self.logger.info("=" * 60)
         
-        # Process each atlas
-        results = []
-        for atlas in atlases:
-            result = self.extract_connectivity_matrix(input_file, run_dir, atlas, base_name)
-            results.append(result)
+        # Process all atlases in a single tracking pass
+        results = self.extract_connectivity_matrix(input_file, run_dir, atlases, base_name)
         
         # Save processing summary in logs directory
         dsi_check = self.check_dsi_studio()
@@ -1406,7 +1462,7 @@ if __name__ == "__main__":
         return summary
 def create_batch_processor(input_dir: str, output_dir: str, pattern: str = "*.fib.gz") -> List[Dict]:
     """Process multiple fiber files in batch."""
-    extractor = ConnectivityExtractor()
+    extractor = ConnectivityExtractor(output_dir=output_dir)
     input_path = Path(input_dir)
     
     if not input_path.exists():
@@ -1655,8 +1711,8 @@ For more help: see README.md
         sys.exit(1)
     
     try:
-        extractor = ConnectivityExtractor(config)
-        
+        extractor = ConnectivityExtractor(config, output_dir=args.output)
+
         # Run validation first
         print("🔍 Validating configuration...")
         validation_result = extractor.validate_configuration()

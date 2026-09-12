@@ -12,7 +12,7 @@
   ],
   "track_count": 1000000,
   "thread_count": 8,
-  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio",
+  "dsi_studio_cmd": "/data/local/software/dsistuido/installation/apptainer/run_dsi_studio.sh",
   "tracking_parameters": {
     "method": 0,
     "otsu_threshold": 0.6,

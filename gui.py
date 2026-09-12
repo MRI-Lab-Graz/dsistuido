@@ -50,9 +50,6 @@ SERVER_STATE_FILE = SETTINGS_DIR / "webui_server_state.json"
 # project's own <project_root>/code/dsistudio/project.json, never here.
 PROJECTS_REGISTRY_FILE = SETTINGS_DIR / "projects_registry.json"
 APP_SIGNATURE = "dsi-studio-webui"
-# Matches the default in scripts/pipeline/dsi_studio_pipeline.py's --dsi_studio_cmd
-# argument, so atlas discovery looks in the same place the pipeline actually runs.
-DEFAULT_DSI_STUDIO_CMD = "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio"
 # Host-side atlas library, independent of whichever DSI Studio binary/Apptainer
 # image is currently pinned (image rebuilds have changed the bundled atlas set
 # before). See /data/local/software/dsi_studio_atlases/SOURCES.md.
@@ -91,6 +88,12 @@ logger = logging.getLogger("webui")
 jobs_lock = threading.Lock()
 jobs: Dict[str, Dict] = {}
 job_processes: Dict[str, subprocess.Popen] = {}
+# Snapshot of `jobs` on disk, so a job launched before a `--restart` (the
+# default - see main()) is still visible/stoppable after the new server
+# process comes up, instead of silently vanishing from the UI while the
+# subprocess (which outlives the restart - see start_new_session in
+# _run_job) keeps running unseen.
+JOBS_STATE_FILE = SETTINGS_DIR / "jobs_state.json"
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -99,6 +102,49 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # (an unauthenticated shared secret) - see scripts/web_settings/ntfy.env.example.
 # Absent by default, so notifications are opt-in and silently skipped until set up.
 NTFY_ENV_FILE = SETTINGS_DIR / "ntfy.env"
+
+
+def _save_jobs_snapshot(jobs_dict: Dict[str, Dict], path: Path = None) -> None:
+    """Best-effort write of the jobs dict to disk. Never raises - a failed
+    snapshot write shouldn't break the job it's tracking."""
+    path = path or JOBS_STATE_FILE
+    try:
+        path.write_text(json.dumps(jobs_dict, indent=2))
+    except OSError:
+        pass
+
+
+def _load_jobs_snapshot(path: Path = None) -> Dict[str, Dict]:
+    """Read back the jobs snapshot. Missing/corrupt file -> {} (same
+    "not configured yet" treatment as _load_ntfy_config)."""
+    path = path or JOBS_STATE_FILE
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _persist_jobs() -> None:
+    """Snapshot the current `jobs` dict to disk. Call after any mutation
+    under jobs_lock (copy the dict while holding the lock, write outside it
+    so file IO doesn't block other job operations)."""
+    with jobs_lock:
+        snapshot = dict(jobs)
+    _save_jobs_snapshot(snapshot)
+
+
+def _reconcile_persisted_jobs(jobs_dict: Dict[str, Dict], is_alive) -> Dict[str, Dict]:
+    """After loading a jobs snapshot at startup, any job still marked
+    "running" whose pid is no longer alive was orphaned by a server
+    restart (or crash) - there's no thread left to ever mark it
+    completed/failed, so it would otherwise show as "running" forever.
+    Mark it "interrupted" instead; leave everything else untouched."""
+    for job in jobs_dict.values():
+        if job.get("status") == "running" and not is_alive(job.get("pid")):
+            job["status"] = "interrupted"
+    return jobs_dict
 
 
 def _is_process_running(pid: int) -> bool:
@@ -110,6 +156,23 @@ def _is_process_running(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _is_loopback_host(host: str) -> bool:
+    """True if `host` only ever resolves to this machine (127.0.0.1,
+    ::1, localhost). Used to gate --host: the /api/fs/*, /api/run/* and
+    job-log routes have no auth and can read/write/execute anywhere this
+    process can, on request from anyone who can reach the port - fine on
+    loopback (only local users), not fine on a LAN/0.0.0.0 bind without an
+    explicit opt-in.
+    """
+    import ipaddress
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False  # not a literal IP (e.g. "0.0.0.0" IS one and returns above; a hostname isn't guaranteed loopback)
 
 
 def _public_host_for_url(host: str) -> str:
@@ -248,7 +311,7 @@ def _atlas_human_dir(dsi_studio_cmd: Optional[str] = None) -> Path:
     that install-local path changes contents (and breaks entirely for the
     Apptainer wrapper) every time the pinned image is rebuilt. dsi_studio_cmd
     is accepted for API-compatibility with existing callers but no longer
-    used; dsi_studio_pipeline.py's atlas validation uses the same constant.
+    used; dsi_studio_pipeline.py's atlas validation uses the same SHARED_ATLAS_DIR.
     """
     return SHARED_ATLAS_DIR
 
@@ -486,6 +549,8 @@ def _run_job(job_id: str, cmd: List[str], cwd: Optional[Path]):
             )
             with jobs_lock:
                 job_processes[job_id] = proc
+                jobs[job_id]["pid"] = proc.pid
+            _persist_jobs()
             rc = proc.wait()
     except Exception as exc:  # noqa: BLE001
         with open(log_file, "a", encoding="utf-8") as fh:
@@ -501,6 +566,7 @@ def _run_job(job_id: str, cmd: List[str], cwd: Optional[Path]):
         jobs[job_id]["ended_at"] = datetime.now(timezone.utc).isoformat()
         jobs[job_id]["duration_sec"] = round(end_ts - start_ts, 2)
         job_snapshot = dict(jobs[job_id])
+    _persist_jobs()
 
     # Manual stops are excluded - the user is already at the controls when
     # they hit "stop job", so a push notification would be noise.
@@ -556,6 +622,7 @@ def launch_job(
             "notify": notify,
             "label": label,
         }
+    _persist_jobs()
     thread = threading.Thread(target=_run_job, args=(job_id, cmd, cwd), daemon=True)
     thread.start()
     return {"job_id": job_id, "log_file": str(log_file)}
@@ -1155,14 +1222,20 @@ def api_job_stop(job_id):
         proc = job_processes.get(job_id)
     if not job:
         return _json_error("Unknown job_id", 404)
-    if job["status"] != "running" or proc is None:
+    # proc is only set for jobs launched by *this* server instance. A job
+    # recovered from JOBS_STATE_FILE after a --restart (see main()) has no
+    # proc here even though its subprocess is genuinely still running -
+    # fall back to the persisted pid so it stays stoppable across restarts.
+    target_pid = proc.pid if proc is not None else job.get("pid")
+    if job["status"] != "running" or not target_pid:
         return _json_error("Job is not running", 400)
 
     with jobs_lock:
         jobs[job_id]["status"] = "stopped"
+    _persist_jobs()
 
     try:
-        pgid = os.getpgid(proc.pid)
+        pgid = os.getpgid(target_pid)
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
         return jsonify({"ok": True})
@@ -1175,8 +1248,8 @@ def api_job_stop(job_id):
         # caught or cleaned up after.
         time.sleep(30)
         try:
-            if proc.poll() is None:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            if _is_process_running(target_pid):
+                os.killpg(os.getpgid(target_pid), signal.SIGKILL)
         except ProcessLookupError:
             pass
 
@@ -1493,11 +1566,19 @@ def main():
     parser = argparse.ArgumentParser(description="Flask + Waitress UI for DSI Studio helpers")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=5000, help="Preferred port (auto-increment if busy)")
+    parser.add_argument("--allow-network", action="store_true", help="Required alongside a non-loopback --host: the /api/fs/*, /api/run/* etc. routes have no authentication, so binding off 127.0.0.1/localhost needs an explicit opt-in.")
     parser.add_argument("--open", action="store_true", help="Auto-open the UI URL in a browser after starting (default: off)")
     parser.add_argument("--no-open", action="store_true", help="No-op: browser auto-open is off by default now. Kept only so old invocations don't error.")
     parser.add_argument("--new-instance", action="store_true", help="Start a new server even if an existing instance is already running (does NOT stop it - if the preferred port is taken, this binds a different one instead, so the old instance keeps serving its old code). Rarely what you want - see --restart.")
     parser.add_argument("--restart", action=argparse.BooleanOptionalAction, default=True, help="Stop any existing tracked instance (from a previous run) and start fresh on the same port, so code changes actually take effect (default: on). Pass --no-restart to instead reuse a healthy existing instance if one is running.")
     args = parser.parse_args()
+
+    if not _is_loopback_host(args.host) and not args.allow_network:
+        parser.error(
+            f"--host {args.host} is not loopback, and the fs/job/run API routes have no "
+            f"authentication - anyone who can reach this port could read/write files or launch "
+            f"jobs as this user. Pass --allow-network to bind it anyway."
+        )
 
     if args.restart:
         _kill_existing_instance()
@@ -1543,6 +1624,18 @@ def main():
     logger.info("Starting DSI Studio Web UI...")
     logger.info(f"Web UI available at: {url}")
     logger.info("Press Ctrl+C to stop")
+
+    # Recover jobs tracked by a previous instance of this server (e.g. the
+    # one --restart just stopped) so a job that was launched before the
+    # restart doesn't just vanish from the UI while its subprocess (which
+    # outlives the restart - see start_new_session in _run_job) keeps
+    # running unseen and unstoppable from here.
+    with jobs_lock:
+        jobs.update(_reconcile_persisted_jobs(
+            _load_jobs_snapshot(),
+            is_alive=lambda pid: bool(pid) and _is_process_running(pid),
+        ))
+
     if args.open:
         # Open after startup begins; non-blocking and best-effort.
         threading.Timer(1.2, _open_browser, args=[url]).start()

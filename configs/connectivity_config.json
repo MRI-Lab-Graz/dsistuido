@@ -30,5 +30,5 @@
     "connectivity_type": "pass",
     "connectivity_output": "matrix,connectogram,network"
   },
-  "dsi_studio_cmd": "/data/local/software/dsi-studio/2025.04.16/dsi-studio/dsi_studio"
+  "dsi_studio_cmd": "/data/local/software/dsistuido/installation/apptainer/run_dsi_studio.sh"
 }
